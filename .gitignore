@@ -26,3 +26,7 @@ gui/build/
 gui/dist/
 gui/*.log
 firmware/build/
+
+# 原厂固件 dump（版权归原厂，仅本地备份）
+firmware/original/
+backup/

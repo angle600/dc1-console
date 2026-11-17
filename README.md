@@ -292,6 +292,7 @@ sourceComponent: root.curType === "DC1" ? dc1Comp
 - [`docs/02-手机配网.md`](docs/02-手机配网.md) — 强制门户配网
 - [`docs/03-AI内网控制.md`](docs/03-AI内网控制.md) — ESPHome 路线的 AI 控制
 - [`docs/04-MicroPython方案.md`](docs/04-MicroPython方案.md) — 可行性与 OTA 边界
+- [`docs/05-原厂固件.md`](docs/05-原厂固件.md) — 原厂固件怎么读、镜像校验、能挖到什么
 
 ## 许可
 
