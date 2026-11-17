@@ -19,8 +19,11 @@ AI / 脚本 ───────┘                 ├ 总开关 + 3 路插孔
 | [`docs/01-刷机方案.md`](docs/01-刷机方案.md) | 拆机 → 备份原厂固件 → 编译 → 线刷 → 验收 → 回滚 |
 | [`docs/02-手机配网.md`](docs/02-手机配网.md) | `DC1-Setup` 强制门户配网，无需装 App |
 | [`docs/03-AI内网控制.md`](docs/03-AI内网控制.md) | Native API / Web / MQTT 三通道，`dc1ctl.py` 用法与自动化 |
+| [`docs/04-MicroPython方案.md`](docs/04-MicroPython方案.md) | **MicroPython 分支**：能否跑、WiFi 烧写到哪一层、与 ESPHome 取舍 |
 | [`firmware/dc1-ai.yaml`](firmware/dc1-ai.yaml) | 定制 ESPHome 配置（AP 配网 + API + Web + OTA） |
+| [`firmware/micropython/`](firmware/micropython/) | MicroPython 固件（AP 配网 + HTTP API + `PUT /api/file` 在线更新） |
 | [`tools/dc1ctl.py`](tools/dc1ctl.py) | 局域网 CLI：`state / on / off / toggle / meter` |
+| [`tools/mp_deploy.py`](tools/mp_deploy.py) | MicroPython：WiFi 推代码 / 串口烧内核 |
 
 ## 三条命令跑通
 
@@ -31,6 +34,14 @@ esphome run dc1-ai.yaml --device COM5                 # 线刷（仅首次）
 pip install aioesphomeapi
 python tools/dc1ctl.py state                          # 读状态
 python tools/dc1ctl.py on 1                           # 开插孔1
+```
+
+MicroPython 分支（首次串口烧内核，之后全 WiFi）：
+
+```bash
+python tools/mp_deploy.py --serial COM5 --flash-img ESP8266_GENERIC-FLASH_1M-20260824-v1.29.0.bin
+python tools/mp_deploy.py --host 192.168.4.1 --token change-me-token   # 推代码
+python tools/mp_deploy.py --host 192.168.4.1 --state                  # 读状态
 ```
 
 ## 目录结构
@@ -46,13 +57,16 @@ python tools/dc1ctl.py on 1                           # 开插孔1
 │   ├── logs/                 # 原厂固件日志（行为对照）
 │   ├── cookbook/             # TTL 接线实拍
 │   └── upstream-README.md    # 上游项目原始说明（保留出处）
-├── docs/                     # 刷机 / 配网 / AI 控制
+├── docs/                     # 刷机 / 配网 / AI 控制 / MicroPython 分支
 ├── firmware/
-│   ├── dc1-ai.yaml           # 主配置
+│   ├── dc1-ai.yaml           # 主配置（ESPHome）
 │   ├── secrets.example.yaml
 │   ├── components/cat9554/   # 本地驱动（U7 简配版需 20kHz）
+│   ├── micropython/          # MicroPython 固件 + 自实现 WiFi 代码更新
 │   └── upstream/             # 上游参考配置（api / mqtt 模板）
-└── tools/dc1ctl.py           # 内网控制 CLI
+└── tools/
+    ├── dc1ctl.py             # 内网控制 CLI（ESPHome API）
+    └── mp_deploy.py          # MicroPython 部署（HTTP PUT / 串口烧内核）
 ```
 
 ## 关键结论（省你三天）
@@ -63,6 +77,9 @@ python tools/dc1ctl.py on 1                           # 开插孔1
 4. **GPIO0 双重身份**：板载 WiFi 灯 + 下载模式拉低脚；刷完务必断开 IO0-GND。
 5. **总继电器 RELY0 串在入口**：关总闸 = 全排 + USB 断电，所以固件用 `shadow1~3` 记忆分路状态。
 6. **原厂固件先 dump 再刷**：`read_flash 0 0x100000`，这是唯一的后悔药。
+7. **MicroPython 能跑，但整片 WiFi OTA 不行**：1MB Flash 放不下两份 593KB 内核，
+   stock 版只能串口刷内核；日常改代码走我们自实现的 `PUT /api/file`（秒级、纯 WiFi）。
+   要连内核都能 WiFi 刷，就选 ESPHome（自带 OTA stub）。
 
 ## 来源与许可
 

@@ -1,0 +1,17 @@
+# 复制为 config.json 后按实际修改；文件放设备根目录
+{
+  "ssid": "YourHome2.4G",
+  "password": "your-wifi-password",
+  "ap_ssid": "DC1-Setup",
+  "ap_pass": "dc1setup",
+  "ap_timeout_s": 120,
+  "hostname": "dc1",
+  "http_port": 80,
+  "api_token": "change-me-token",
+  "webrepl": false,
+  "meter": {
+    "v_gain": 1.0,
+    "i_gain": 1.0,
+    "p_gain": 1.0
+  }
+}
