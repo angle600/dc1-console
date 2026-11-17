@@ -761,6 +761,21 @@ def handle(conn):
     if path == "/api/meter":
         return reply(conn, "200 OK", json.dumps(meter.state() if meter else {}))
 
+    if path == "/api/sys":
+        try:
+            up = time.ticks_diff(time.ticks_ms(), boot_ms) / 1000.0
+        except Exception:
+            up = 0
+        try:
+            rc = machine.reset_cause()
+        except Exception:
+            rc = -1
+        return reply(conn, "200 OK", json.dumps({
+            "up": round(up, 1), "free": gc.mem_free(),
+            "min_free": min_free, "loop": loop_n, "reset": rc,
+            "rssi": (w.status("rssi") if w else 0),
+        }))
+
     if path == "/api/keys":
         raw = -1
         if u7 is not None:
@@ -989,7 +1004,6 @@ else:
         print("AP disabled (STA connected)")
     except Exception as e:
         print("ap disable fail", e)
-    sntp_sync()
 
 us = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 us.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1016,6 +1030,13 @@ try:
     gc.collect()
 except Exception:
     pass
+try:
+    if not ap_mode:
+        t_ok = sntp_sync()
+        log("sntp: %s" % ("ok" if t_ok else "fail"))
+except Exception as e:
+    log("sntp err: %s" % e)
+
 log("wifi: %s" % ("AP" if ap_mode else "STA"))
 log("http bind: %s" % ("ok" if srv else "FAIL"))
 try:
@@ -1048,6 +1069,7 @@ except Exception:
     gc = None
 
 loop_n = 0
+min_free = gc.mem_free()
 last_iter = time.ticks_ms()
 while True:
     loop_n += 1
@@ -1061,6 +1083,9 @@ while True:
     last_iter = _now
     if gc and loop_n % 50 == 0:
         gc.collect()
+        _f = gc.mem_free()
+        if _f < min_free:
+            min_free = _f
     if reset_pending:
         time.sleep_ms(300)
         machine.reset()
