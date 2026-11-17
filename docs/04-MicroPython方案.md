@@ -97,19 +97,11 @@ ESP8266 没有分区表，代码**就地 XIP 执行**，擦掉正在跑的扇区
 
 ## 8. 计量标定（CSE7766 输出的是周期计数，不是伏特）
 
-`cse7766.py` 输出 `v_raw / i_raw / p_raw` + `voltage/current/power`，换算式：
+`cse7766.py` 按手册 §3.5.2 解码：`U = Uk/(Ut*V2R)`、`I = Ik/(It*V1R)`、`P = Pk/(Pt*V1R*V2R)`，
+再乘 `v/i/p_gain`（单点标定系数，默认 1.0）。标定用 `/api/cal`（GUI 的「标定…」或
+`dc1ctl.py cal --power 40`），固件直接用 raw 周期反算，不需要重启。
 
-```
-V = v_gain / v_raw * 1e6      I = i_gain / i_raw * 1e6      P = p_gain / p_raw * 1e6
-```
-
-标定步骤（10 分钟）：
-
-1. 插一个**已知功率**负载（如 60W 白炽灯；LED 灯功率因数低，别用）。
-2. `curl http://<ip>/api/meter` 看 `p_raw`。
-3. `p_gain = 实测功率 * p_raw / 1e6`，写进 `config.json` 的 `meter.p_gain`，`POST /api/config`。
-4. 电压同理（万用表读 220V 附近）；电流用钳表或按 P/V 反推。
-5. 三次交叉验证：空载应为 0（`*_raw` 为 0 时驱动直接返回 0）。
+基准负载怎么选（白炽灯 ✅ / 电热器 ✅ / 电烙铁 ⚠ / LED ❌）见 README「电量计量与标定」。
 
 ## 9. 上机验收清单（首次必做）
 
@@ -138,7 +130,7 @@ V = v_gain / v_raw * 1e6      I = i_gain / i_raw * 1e6      P = p_gain / p_raw *
 
 ## 11. 后续可做（TODO）
 
+- [x] UDP 广播发现 + 30s 配网窗口（v1.1 已实现）
 - [ ] 上机实测 + 按第 8 节标定，把默认 gain 写回 `config.example.json`
-- [ ] 加 UDP 广播发现（`DC1-DISCOVER` → 回 IP），省掉 mDNS
 - [ ] 把 `dc1ctl.py` 增加 `--http` 后端，与 ESPHome 固件共用一套 CLI
 - [ ] 若要整片 OTA：评估换 4MB 模组 + yaota8266/DFU 分支的可行性（需重新设计 `docs/01` 的烧写流程）

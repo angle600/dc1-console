@@ -28,6 +28,7 @@ qt_add_resources(dc1console "qml"
         qml/GenericPanel.qml
         qml/ProvisionDialog.qml
         qml/FirmwareDialog.qml
+        qml/CalDialog.qml
 )
 
 target_link_libraries(dc1console PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Gui)

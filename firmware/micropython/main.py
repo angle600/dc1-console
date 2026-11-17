@@ -37,7 +37,8 @@ KEY_BIT = {"1": KEY1, "2": KEY2, "3": KEY3}
 DEFAULT_CFG = {
     "ssid": "", "password": "", "ap_ssid": "DC1-Setup", "ap_pass": "dc1setup",
     "name": "DC1", "hostname": "dc1", "http_port": 80, "api_token": "",
-    "meter": {"v_gain": 1.0, "i_gain": 1.0, "p_gain": 1.0},
+    "meter": {"v_gain": 1.0, "i_gain": 1.0, "p_gain": 1.0,
+              "v1r": 1.0, "v2r": 1.0},
 }
 
 boot_ms = time.ticks_ms()
@@ -111,7 +112,8 @@ if not pin_total.value():
     try:
         _u = UART(0, baudrate=4800, bits=8, parity=0, stop=1, tx=15, rx=13,
                   timeout=200)
-        meter = CSE7766(_u)
+        meter = CSE7766(_u, v1r=float(DEFAULT_CFG["meter"].get("v1r", 1.0)),
+                        v2r=float(DEFAULT_CFG["meter"].get("v2r", 1.0)))
     except Exception as e:
         print("cse7766 init fail:", e)
 else:
@@ -124,6 +126,8 @@ def set_gains():
         meter.v_gain = float(m.get("v_gain", 1.0))
         meter.i_gain = float(m.get("i_gain", 1.0))
         meter.p_gain = float(m.get("p_gain", 1.0))
+        meter.v1r = float(m.get("v1r", 1.0))
+        meter.v2r = float(m.get("v2r", 1.0))
 
 
 def relay_write(ch, on):
@@ -439,6 +443,18 @@ def handle(conn):
         return reply(conn, "200 OK", json.dumps(info_obj()))
     if path == "/api/state":
         return reply(conn, "200 OK", state_json())
+    if path == "/api/cal" and method == "GET":
+        last = meter.state() if meter else {}
+        return reply(conn, "200 OK", json.dumps({
+            "meter": cfg.get("meter") or {},
+            "measured": {"voltage": last.get("voltage", 0),
+                         "current": last.get("current", 0),
+                         "power": last.get("power", 0)},
+            "raw": {k: last.get(k, 0) for k in ("uk", "ut", "ik", "it", "pk", "pt")},
+            "calibrated": last.get("calibrated", 0),
+            "flags": last.get("flags", 0),
+        }))
+
     if path == "/api/energy":
         return reply(conn, "200 OK", json.dumps(energy.state()))
     if path == "/api/meter":
@@ -506,6 +522,57 @@ def handle(conn):
         except Exception as e:
             return reply(conn, "400 Bad Request", '{"err":"%s"}' % e)
         return reply(conn, "400 Bad Request", '{"err":"bad epoch"}')
+
+    # 单点标定：把"电表读数"换算成系数（gain_new = 真实值 * 周期 / 系数）
+    if path == "/api/cal":
+        if not need_token(hdrs, q):
+            return reply(conn, "401 Unauthorized", '{"err":"token"}')
+        m = cfg.get("meter") or {}
+        if js.get("reset") or q.get("reset"):
+            m.update({"v_gain": 1.0, "i_gain": 1.0, "p_gain": 1.0})
+            cfg["meter"] = m
+            save_json(CFG_FILE, cfg)
+            set_gains()
+            return reply(conn, "200 OK", json.dumps({"ok": 1, "meter": m}))
+        if meter is None:
+            return reply(conn, "503 Unavailable",
+                         '{"err":"meter_off","hint":"安全模式下未初始化 CSE7766"}')
+        last = meter.state()
+        changed = {}
+        try:
+            if js.get("voltage") or q.get("voltage"):
+                true_v = float(js.get("voltage") or q.get("voltage"))
+                ut, uk = last.get("ut", 0), last.get("uk", 0)
+                if not (ut and uk):
+                    raise ValueError("no_frame")
+                m["v_gain"] = round(true_v * ut / uk, 6)
+                changed["v_gain"] = m["v_gain"]
+            if js.get("current") or q.get("current"):
+                true_i = float(js.get("current") or q.get("current"))
+                it, ik = last.get("it", 0), last.get("ik", 0)
+                if not (it and ik):
+                    raise ValueError("no_frame")
+                m["i_gain"] = round(true_i * it / ik, 6)
+                changed["i_gain"] = m["i_gain"]
+            if js.get("power") or q.get("power"):
+                true_p = float(js.get("power") or q.get("power"))
+                pt, pk = last.get("pt", 0), last.get("pk", 0)
+                if not (pt and pk):
+                    raise ValueError("no_frame")
+                m["p_gain"] = round(true_p * pt / pk, 6)
+                changed["p_gain"] = m["p_gain"]
+        except Exception as e:
+            return reply(conn, "400 Bad Request", '{"err":"%s"}' % e)
+        if not changed:
+            return reply(conn, "400 Bad Request", '{"err":"need voltage/current/power"}')
+        cfg["meter"] = m
+        save_json(CFG_FILE, cfg)
+        set_gains()
+        return reply(conn, "200 OK", json.dumps(
+            {"ok": 1, "changed": changed, "gains": m,
+             "measured": {"voltage": last.get("voltage"),
+                          "current": last.get("current"),
+                          "power": last.get("power")}}))
 
     if path == "/api/config":
         if not need_token(hdrs, q):

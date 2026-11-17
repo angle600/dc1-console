@@ -292,6 +292,40 @@ def cmd_time(a):
     emit(r, a.json, "设备时间已校准" if r.get("ok") else "失败：%s" % r.get("err"))
 
 
+def cmd_cal(a):
+    """单点标定：用外部电表读数校正 V/A/W。"""
+    host = resolve(a)
+    if not (a.power or a.voltage or a.current or a.reset):
+        r = get_json(host, "/api/cal", a.token)
+        m = r.get("meter") or {}
+        me = r.get("measured") or {}
+        emit(r, a.json,
+             "当前读数  V=%.1f A=%.3f W=%.1f\n系数  v=%.6f i=%.6f p=%.6f\n"
+             "芯片%s，异常标志 0x%x" %
+             (me.get("voltage", 0), me.get("current", 0), me.get("power", 0),
+              m.get("v_gain", 1), m.get("i_gain", 1), m.get("p_gain", 1),
+              "已校准" if r.get("calibrated") else "未校准",
+              r.get("flags", 0)))
+        return
+    body = {}
+    if a.reset:
+        body["reset"] = 1
+    if a.voltage:
+        body["voltage"] = a.voltage
+    if a.current:
+        body["current"] = a.current
+    if a.power:
+        body["power"] = a.power
+    r = http(host, "/api/cal", "POST", body, a.token)
+    if r.get("ok"):
+        g = r.get("gains") or {}
+        emit(r, a.json, "标定完成：v=%.6f i=%.6f p=%.6f" %
+             (g.get("v_gain", 1), g.get("i_gain", 1), g.get("p_gain", 1)))
+    else:
+        emit(r, a.json, "失败：%s %s" % (r.get("err"), r.get("hint", "")))
+        sys.exit(1)
+
+
 def cmd_reboot(a):
     host = resolve(a)
     r = http(host, "/api/reboot", "POST", {}, a.token)
@@ -406,6 +440,13 @@ def main():
     cd.set_defaults(func=cmd_countdown)
 
     sub.add_parser("meter", parents=[common]).set_defaults(func=cmd_meter)
+
+    cal = sub.add_parser("cal", parents=[common])
+    cal.add_argument("--voltage", type=float, help="电表测得的电压 V")
+    cal.add_argument("--current", type=float, help="电表测得的电流 A")
+    cal.add_argument("--power", type=float, help="电表测得的功率 W")
+    cal.add_argument("--reset", action="store_true", help="系数复位为 1.0")
+    cal.set_defaults(func=cmd_cal)
     sub.add_parser("time", parents=[common]).set_defaults(func=cmd_time)
     sub.add_parser("reboot", parents=[common]).set_defaults(func=cmd_reboot)
 

@@ -14,6 +14,7 @@ Item {
     signal delSched(int id)
     signal addCd(var item)
     signal delCd(int id)
+    signal calibrate()
 
     readonly property color card: "#171a21"
     readonly property color line: "#262b36"
@@ -121,7 +122,17 @@ Item {
                     ColumnLayout {
                         anchors.fill: parent
                         anchors.margins: 12
-                        Text { text: qsTr("实时计量"); color: panel.dim; font.pixelSize: 11 }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text { text: qsTr("实时计量"); color: panel.dim; font.pixelSize: 11 }
+                            Item { Layout.fillWidth: true }
+                            Button {
+                                text: qsTr("标定…")
+                                implicitHeight: 24
+                                font.pixelSize: 11
+                                onClicked: panel.calibrate()
+                            }
+                        }
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 18
@@ -270,14 +281,16 @@ Item {
                         RadioButton {
                             id: rbOnce
                             text: qsTr("单次")
-                            spacing: 6
+                            spacing: 8
+                            leftPadding: 0
                             checked: true
                             onCheckedChanged: panel.onceMode = checked
                         }
                         RadioButton {
                             id: rbWeek
                             text: qsTr("每周重复")
-                            spacing: 6
+                            spacing: 8
+                            leftPadding: 0
                             onCheckedChanged: if (checked) panel.onceMode = false
                         }
 

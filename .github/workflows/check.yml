@@ -23,7 +23,9 @@ jobs:
             firmware/micropython/*.py
 
       - name: 固件逻辑单测（定时单次/每周、倒计时、电量）
-        run: python tests/test_store.py
+        run: |
+          python tests/test_store.py
+          python tests/test_cse7766.py
 
       - name: JSON 配置校验
         run: |

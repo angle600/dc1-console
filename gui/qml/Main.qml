@@ -91,6 +91,10 @@ ApplicationWindow {
             } else if (pending === "cd" || pending === "cd-del") {
                 status = qsTr("倒计时已更新")
                 refresh()
+            } else if (pending === "cal") {
+                status = (data && data.ok) ? qsTr("标定已写入（新系数已生效）")
+                                           : qsTr("标定失败：") + (data ? (data.err || data.hint || "") : json)
+                refresh()
             } else if (pending === "reboot") {
                 status = qsTr("重启指令已发送")
             } else if (pending === "time") {
@@ -363,6 +367,7 @@ ApplicationWindow {
                                  "--on", item.on ? "1" : "0", "--min", String(item.min),
                                  "--ip", root.curIp, "--json"])
             }
+            onCalibrate: calDlg.open()
             onDelCd: function (id) {
                 root.call("cd-del", ["countdown", "del", "--id", String(id),
                                      "--ip", root.curIp, "--json"])
@@ -382,6 +387,15 @@ ApplicationWindow {
             if (name !== "")
                 args.push("--name", name)
             root.call("prov", args)
+        }
+    }
+
+    CalDialog {
+        id: calDlg
+        meter: root.st.meter || ({})
+        onApply: function (kind, value) {
+            var a = ["cal", "--ip", root.curIp, "--json", "--" + kind, String(value)]
+            root.call("cal", a)
         }
     }
 

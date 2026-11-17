@@ -134,6 +134,7 @@ python cli/dc1ctl.py countdown add --ch 1 --on 0 --min 30               # 30 分
 python cli/dc1ctl.py time                            # 校时（定时功能依赖）
 python cli/dc1ctl.py fw update --ip 192.168.1.9      # WiFi 覆盖源码
 python cli/dc1ctl.py fw update --mpy --ip 192.168.1.9  # 传 mpy 产物（省 RAM，main.py 仍传源码）
+python cli/dc1ctl.py cal --power 40                  # 用 40W 基准负载标定功率
 ```
 
 所有命令加 `--json` 输出机器可读结果——GUI 就是靠这个契约工作的。
@@ -200,6 +201,42 @@ windeployqt --qmldir qml build/dc1console.exe
 
 电路资料与反推过程见 [`hardware/README.md`](hardware/README.md) 与
 [`hardware/DC1-原理框图.svg`](hardware/DC1-原理框图.svg)。
+
+## 电量计量与标定
+
+**硬件**：每台 DC1 一颗 CSE7766（U11），串在**整排总回路**上 —— 量的是"这一排总共用了多少"，
+不是每个插孔独立计量（分路只能靠软件按开关状态估算）。
+
+**芯片给的是周期计数，不是伏特**（手册 Rev1.2 §3.5.2）：
+
+```
+U = Uk / (Ut × V2R)      I = Ik / (It × V1R)      P = Pk / (Pt × V1R × V2R)
+```
+
+`Uk/Ik/Pk` 是芯片出厂校准系数（随帧下发），`Ut/It/Pt` 是周期，`V1R`=采样锰铜电阻(mΩ)、
+`V2R`=分压电阻(MΩ)。DC1 的 V1R/V2R 未公开，固件统一按 1.0 处理，用 `v/i/p_gain` 做**单点标定**：
+
+```
+gain_new = 真实值 × 周期 ÷ 系数     # 固件 /api/cal 直接算，不用重启
+```
+
+### 怎么标（GUI / CLI 都行）
+
+- GUI：选中设备 → 「实时计量」卡右上角 **标定…** → 选参量（功率/电压/电流）→ 填电表读数 → 写入系数
+- CLI：`python cli/dc1ctl.py cal --power 40` / `cal --voltage 220.3` / `cal`（查看）/ `cal --reset`
+
+### 用什么负载当基准
+
+| 负载 | 可用性 | 原因 |
+|---|---|---|
+| 白炽灯 / 卤素灯 40~100 W | ✅ 最佳 | 纯阻性，PF≈1，功率稳定不漂 |
+| 电热水壶 / 电暖器 1000 W+ | ✅ 最佳（电流大更准） | 阻性，远离量程下限，误差最小 |
+| 电烙铁 40 W | ⚠ 勉强 | 温控通断 → 功率周期性波动；40 W≈0.18 A 接近量程下限 |
+| LED 灯 40 W | ❌ 不建议 | 恒流驱动 + 低 PF（0.5~0.9），电流非正弦；"40W"常是等效亮度标称，实际可能只有几瓦 |
+
+> 若基准是廉价插座功率计，它可能显示**视在功率**（VA）而非有功功率 —— 用它标 LED 会把
+> CSE7766 这点准确度彻底带偏。要标就标**有功功率**，且负载最好是白炽灯/电热器。
+
 
 ## 扩展新的设备类型
 
