@@ -1,0 +1,19 @@
+# 临时文件
+.tmp/
+*.log
+t.txt
+
+# ESPHome
+firmware/secrets.yaml
+firmware/build/
+firmware/.esphome/
+firmware/*.bin
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 备份固件（体积大，本地保存不进 git）
+backup/
+*.bak

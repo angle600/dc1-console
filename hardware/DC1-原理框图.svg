@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 720" width="1080" height="720" font-family="Microsoft YaHei, PingFang SC, Helvetica, Arial, sans-serif">
+  <title>斐讯 DC1 智能排插 原理框图（社区反推整理）</title>
+  <rect width="1080" height="720" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="700" fill="#111">斐讯 DC1 智能排插 · 原理框图（实物反推整理版）</text>
+  <text x="24" y="56" font-size="12" fill="#666">官方未公开原理图；本图依据标注 PCB 照片、I2C/UART 抓包与芯片手册整理。橙色=强电，蓝色=逻辑，绿色=电源。</text>
+
+  <!-- ============ 强电链 ============ -->
+  <rect x="24" y="86" width="96" height="64" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+  <text x="72" y="112" font-size="13" text-anchor="middle" fill="#7a4a00" font-weight="700">AC 220V</text>
+  <text x="72" y="132" font-size="11" text-anchor="middle" fill="#7a4a00">L / N / PE</text>
+
+  <path d="M120 118 H156" stroke="#e08600" stroke-width="3"/>
+  <polygon points="156,112 168,118 156,124" fill="#e08600"/>
+
+  <rect x="168" y="86" width="92" height="64" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+  <text x="214" y="112" font-size="12" text-anchor="middle" fill="#7a4a00" font-weight="700">保险丝</text>
+  <text x="214" y="130" font-size="11" text-anchor="middle" fill="#7a4a00">+ NTC</text>
+
+  <path d="M260 118 H296" stroke="#e08600" stroke-width="3"/>
+  <polygon points="296,112 308,118 296,124" fill="#e08600"/>
+
+  <rect x="308" y="80" width="150" height="76" rx="8" fill="#ffe0b2" stroke="#d2691e" stroke-width="2"/>
+  <text x="383" y="106" font-size="13" text-anchor="middle" fill="#7a3b00" font-weight="700">RELY0 总继电器</text>
+  <text x="383" y="124" font-size="11" text-anchor="middle" fill="#7a3b00">U7 P7 · YX201 5V</text>
+  <text x="383" y="142" font-size="11" text-anchor="middle" fill="#7a3b00">串在整排总回路</text>
+
+  <!-- 分路 -->
+  <path d="M458 118 H494" stroke="#e08600" stroke-width="3"/>
+  <path d="M494 118 V188 M494 188 H520 M494 188 V258 M494 188 V328" stroke="#e08600" stroke-width="2"/>
+
+  <g>
+    <rect x="520" y="62" width="150" height="46" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+    <text x="595" y="84" font-size="12" text-anchor="middle" fill="#7a4a00" font-weight="700">USB ×4（降压）</text>
+    <text x="595" y="100" font-size="10" text-anchor="middle" fill="#7a4a00">受 RELY0 控制，无独立计量</text>
+
+    <rect x="520" y="164" width="150" height="48" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+    <text x="595" y="185" font-size="12" text-anchor="middle" fill="#7a4a00" font-weight="700">RELY1 → 插孔1</text>
+    <text x="595" y="202" font-size="10" text-anchor="middle" fill="#7a4a00">U7 P6</text>
+
+    <rect x="520" y="234" width="150" height="48" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+    <text x="595" y="255" font-size="12" text-anchor="middle" fill="#7a4a00" font-weight="700">RELY2 → 插孔2</text>
+    <text x="595" y="272" font-size="10" text-anchor="middle" fill="#7a4a00">U7 P5</text>
+
+    <rect x="520" y="304" width="150" height="48" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+    <text x="595" y="325" font-size="12" text-anchor="middle" fill="#7a4a00" font-weight="700">RELY3 → 插孔3</text>
+    <text x="595" y="342" font-size="10" text-anchor="middle" fill="#7a4a00">U7 P4</text>
+  </g>
+
+  <!-- 计量支路 -->
+  <path d="M383 156 V440 H430" stroke="#e08600" stroke-width="2" stroke-dasharray="6 4"/>
+  <rect x="430" y="404" width="128" height="72" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+  <text x="494" y="428" font-size="12" text-anchor="middle" fill="#7a4a00" font-weight="700">采样电阻</text>
+  <text x="494" y="446" font-size="11" text-anchor="middle" fill="#7a4a00">火线串接</text>
+  <text x="494" y="464" font-size="10" text-anchor="middle" fill="#7a4a00">→ CSE7766 VIN</text>
+
+  <path d="M558 440 H590" stroke="#e08600" stroke-width="2"/>
+  <polygon points="590,434 602,440 590,446" fill="#e08600"/>
+  <rect x="602" y="398" width="140" height="84" rx="8" fill="#e8f0fe" stroke="#2f5fd0" stroke-width="2"/>
+  <text x="672" y="422" font-size="12" text-anchor="middle" fill="#1a3c8c" font-weight="700">U11 CSE7766</text>
+  <text x="672" y="441" font-size="10" text-anchor="middle" fill="#1a3c8c">电量计量</text>
+  <text x="672" y="457" font-size="10" text-anchor="middle" fill="#1a3c8c">UART 4800 8E1</text>
+  <text x="672" y="473" font-size="10" text-anchor="middle" fill="#1a3c8c">单向发送</text>
+
+  <!-- ============ 主控 ============ -->
+  <rect x="742" y="86" width="196" height="212" rx="10" fill="#e8f0fe" stroke="#2f5fd0" stroke-width="2"/>
+  <text x="840" y="112" font-size="14" text-anchor="middle" fill="#1a3c8c" font-weight="700">U1 芯海 CSM64F02</text>
+  <text x="840" y="130" font-size="11" text-anchor="middle" fill="#1a3c8c">≙ ESP-WROOM-02 (ESP8266EX)</text>
+  <text x="840" y="146" font-size="11" text-anchor="middle" fill="#1a3c8c">1MB Flash · PCB 天线</text>
+  <line x1="758" y1="158" x2="922" y2="158" stroke="#9db8e8" stroke-width="1"/>
+  <text x="758" y="178" font-size="10.5" fill="#1a3c8c">GPIO3  SDA → U7 (I2C)</text>
+  <text x="758" y="196" font-size="10.5" fill="#1a3c8c">GPIO12 SCL → U7 (20kHz)</text>
+  <text x="758" y="214" font-size="10.5" fill="#1a3c8c">GPIO4  ← U7 INT</text>
+  <text x="758" y="232" font-size="10.5" fill="#1a3c8c">GPIO13 ← CSE7766 TX</text>
+  <text x="758" y="250" font-size="10.5" fill="#1a3c8c">GPIO16 ← 总按键</text>
+  <text x="758" y="268" font-size="10.5" fill="#1a3c8c">GPIO14 → RELAYLED / LOGO</text>
+  <text x="758" y="286" font-size="10.5" fill="#1a3c8c">GPIO0  → WiFi LED / 下载</text>
+
+  <!-- 计量到 MCU -->
+  <path d="M742 440 H726 V298 H742" stroke="#2f5fd0" stroke-width="2" fill="none"/>
+  <polygon points="736,304 742,292 748,304" fill="#2f5fd0"/>
+
+  <!-- ============ IO 扩展 ============ -->
+  <rect x="742" y="330" width="196" height="196" rx="10" fill="#e8f0fe" stroke="#2f5fd0" stroke-width="2"/>
+  <text x="840" y="356" font-size="14" text-anchor="middle" fill="#1a3c8c" font-weight="700">U7 CAT9554（0x20）</text>
+  <text x="840" y="373" font-size="10.5" text-anchor="middle" fill="#556">简配版 · I2C ≤20kHz · INT 下降沿</text>
+  <line x1="758" y1="384" x2="922" y2="384" stroke="#9db8e8" stroke-width="1"/>
+  <text x="758" y="404" font-size="10.5" fill="#1a3c8c">P0/P1/P2 ← KEY1/2/3 按键</text>
+  <text x="758" y="424" font-size="10.5" fill="#1a3c8c">P3 = NC</text>
+  <text x="758" y="444" font-size="10.5" fill="#1a3c8c">P4/P5/P6 → RELY3/2/1</text>
+  <text x="758" y="464" font-size="10.5" fill="#1a3c8c">P7 → RELY0 总继电器</text>
+  <text x="758" y="484" font-size="10.5" fill="#1a3c8c">寄存器 0/1/2/3：输入/输出</text>
+  <text x="758" y="502" font-size="10.5" fill="#1a3c8c">/极性/方向（1=输入）</text>
+
+  <!-- U7 -> 继电器 连线（示意） -->
+  <path d="M742 454 H706 V164" stroke="#8a5a00" stroke-width="1.6" stroke-dasharray="5 3" fill="none"/>
+  <text x="672" y="158" font-size="10" fill="#8a5a00" transform="rotate(-90 672 158)">RE0~RE3 驱动（经 P1 排线）</text>
+
+  <!-- ============ 电源 ============ -->
+  <rect x="24" y="470" width="380" height="118" rx="10" fill="#e7f7ec" stroke="#2e8b57" stroke-width="2"/>
+  <text x="44" y="496" font-size="13" fill="#1c5f36" font-weight="700">电源板：PN8016 非隔离降压</text>
+  <text x="44" y="518" font-size="11" fill="#1c5f36">220V → 5V（继电器线圈 / 逻辑）→ LDO → 3.3V（模组 + U7 + U11）</text>
+  <text x="44" y="540" font-size="11" fill="#1c5f36">P1 排线：5V | RE4 | RE3 | RE2 | K4 | K3 | K2 | GND</text>
+  <text x="44" y="562" font-size="11" fill="#c0392b">⚠ 非隔离：调试时整板带强电，必须断电再动烙铁</text>
+
+  <!-- 电源到 MCU -->
+  <path d="M404 512 H700 V120 H742" stroke="#2e8b57" stroke-width="2" fill="none"/>
+  <polygon points="736,114 742,126 748,114" fill="#2e8b57"/>
+  <text x="452" y="504" font-size="10.5" fill="#1c5f36">5V / 3.3V</text>
+
+  <!-- ============ 外部交互 ============ -->
+  <rect x="742" y="546" width="196" height="88" rx="10" fill="#f3f0ff" stroke="#6a4fd0" stroke-width="2"/>
+  <text x="840" y="570" font-size="12" text-anchor="middle" fill="#4a2fa0" font-weight="700">人机 / 网络</text>
+  <text x="758" y="590" font-size="10.5" fill="#4a2fa0">4 个实体按键（3 分路 + 总）</text>
+  <text x="758" y="607" font-size="10.5" fill="#4a2fa0">LOGO 灯 / WiFi 状态灯</text>
+  <text x="758" y="624" font-size="10.5" fill="#4a2fa0">WiFi 2.4G → AP 配网 / API</text>
+
+  <!-- 图例 -->
+  <rect x="24" y="612" width="18" height="12" fill="#fff4e6" stroke="#e08600" stroke-width="1.5"/>
+  <text x="50" y="623" font-size="10.5" fill="#444">强电回路</text>
+  <rect x="124" y="612" width="18" height="12" fill="#e8f0fe" stroke="#2f5fd0" stroke-width="1.5"/>
+  <text x="150" y="623" font-size="10.5" fill="#444">逻辑 / 通信</text>
+  <rect x="236" y="612" width="18" height="12" fill="#e7f7ec" stroke="#2e8b57" stroke-width="1.5"/>
+  <text x="262" y="623" font-size="10.5" fill="#444">电源</text>
+  <text x="24" y="656" font-size="10.5" fill="#888">注：RELY0 串在入口，故“关总开关”会同时切断三路插孔与 USB；软件层用 shadow 变量记忆分路状态，再开总开关时恢复。</text>
+  <text x="24" y="674" font-size="10.5" fill="#888">引脚依据：firmware/dc1-ai.yaml 与 hardware/image/*_标注.jpg 互相印证。</text>
+  <text x="24" y="694" font-size="10" fill="#aaa">资料整理自 Samuel-0-0/phicomm_dc1-esphome（社区反推），仅供个人维修与自用固件开发。</text>
+</svg>
