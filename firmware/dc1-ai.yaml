@@ -1,0 +1,262 @@
+---
+# =============================================================================
+# 斐讯 DC1 智能排插 —— 自用固件（ESPHome）
+# 定位：手机 AP 配网 + 局域网 Native API / Web 控制，供 AI 通过内网控制
+# 硬件：ESP8266（芯海 CSM64F02 ≙ ESP-WROOM-02）+ CAT9554(U7) + CSE7766(U11)
+# 配置目录：firmware/（本文件与 components/ 同级，ESPHome 才会加载本地组件）
+# 编译：esphome dc1-ai.yaml compile   刷写：esphome dc1-ai.yaml run
+# 说明：默认使用随仓库携带的 components/cat9554 自定义驱动（U7 是简配版，
+#       I2C 只能跑 ~20kHz）；若要改用 ESPHome 原生 pca9554，见文末注释。
+# =============================================================================
+
+esphome:
+  name: dc1-plug
+  comment: "Phicomm DC1 power strip (ESP8266 + CAT9554 + CSE7766)"
+  platform: ESP8266
+  board: esp01_1m          # 1MB Flash；若拆机读出为 2MB，改 esp01_4m 亦可（需改分区）
+  esp8266_restore_from_flash: true   # 断电记忆，恢复各路开关状态
+  build_path: build/dc1-plug
+
+substitutions:
+  device_name: dc1-plug
+  friendly_name: DC1 排插
+  config_version: "v2026.11.17.ai.001"
+  cse7766_update_interval: 1s
+  # WiFi 连不上多久重启（0s 关闭，避免异常重启把继电器状态带跑）
+  wifi_reboot_timeout: 0s
+  api_reboot_timeout: 0s
+
+# ---------------- WiFi：AP 配网（手机首次配网用） ----------------
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  domain: .local
+  reboot_timeout: $wifi_reboot_timeout
+  power_save_mode: none      # DC1 对 WiFi 睡眠敏感，保持 none
+  fast_connect: false        # SSID 隐藏时改 true
+  # 建议在路由器上给 MAC 做 DHCP 静态绑定；也可直接写死：
+  # manual_ip:
+  #   static_ip: 192.168.36.50
+  #   gateway: 192.168.36.1
+  #   subnet: 255.255.255.0
+  #   dns1: 192.168.36.1
+  ap:                        # 连不上路由时自动开热点，手机连它配网
+    ssid: "DC1-Setup"
+    password: "dc1setup"
+    ap_timeout: 60s
+captive_portal:              # 手机连热点后自动弹配网页（192.168.4.1）
+
+# ---------------- 控制面 1：Native API（AI/HA 用，6053） ----------------
+api:
+  port: 6053
+  reboot_timeout: $api_reboot_timeout
+  encryption:
+    key: !secret api_encryption_key
+
+# ---------------- 控制面 2：Web 页面（手机浏览器/curl 用，80） ----------------
+web_server:
+  port: 80
+  version: 2
+  local: false
+  include_internal: false
+  auth:
+    username: !secret web_username
+    password: !secret web_password
+
+# ---------------- 控制面 3：OTA ----------------
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# ---------------- 总线 ----------------
+i2c:                          # U7(CAT9554) 简配版，实测上限约 20kHz
+  sda: GPIO3
+  scl: GPIO12
+  frequency: 20kHz
+  scan: false
+
+uart:                         # CSE7766 计量芯片：4800 8E1，单向上报
+  rx_pin: GPIO13
+  baud_rate: 4800
+  parity: EVEN
+  stop_bits: 1
+
+# ---------------- IO 扩展 ----------------
+cat9554:                      # 本地自定义组件（components/cat9554）
+  id: cat9554_hub
+  address: 0x20
+  irq_pin: GPIO4
+
+logger:
+  level: INFO
+  baud_rate: 0                # 关掉 UART0 日志，避免干扰 CSE7766
+
+# ---------------- 计量 ----------------
+sensor:
+  - platform: cse7766
+    update_interval: $cse7766_update_interval
+    voltage:
+      name: "${friendly_name} 电压"
+      id: m_voltage
+      accuracy_decimals: 1
+      unit_of_measurement: V
+    current:
+      name: "${friendly_name} 电流"
+      id: m_current
+      accuracy_decimals: 3
+      unit_of_measurement: A
+    power:
+      name: "${friendly_name} 功率"
+      id: m_power
+      accuracy_decimals: 1
+      unit_of_measurement: W
+    energy:
+      name: "${friendly_name} 电量"
+      id: m_energy
+      accuracy_decimals: 3
+      unit_of_measurement: kWh
+  - platform: uptime
+    name: "${friendly_name} 运行时长"
+  - platform: wifi_signal
+    name: "${friendly_name} WiFi 信号"
+    update_interval: 60s
+
+# ---------------- 按键（U7 P0~P2 + GPIO16 总键） ----------------
+binary_sensor:
+  - platform: status
+    name: "${friendly_name} 在线状态"
+
+  - platform: gpio           # KEY1 -> P0
+    name: "${device_name} key1"
+    internal: true
+    pin: { cat9554: cat9554_hub, number: 0, mode: INPUT }
+    filters: [invert, {delayed_on: 50ms}, {delayed_off: 50ms}]
+    on_click:
+      - min_length: 50ms
+        max_length: 600ms
+        then:
+          - switch.toggle: relay1
+
+  - platform: gpio           # KEY2 -> P1
+    name: "${device_name} key2"
+    internal: true
+    pin: { cat9554: cat9554_hub, number: 1, mode: INPUT }
+    filters: [invert, {delayed_on: 50ms}, {delayed_off: 50ms}]
+    on_click:
+      - min_length: 50ms
+        max_length: 600ms
+        then:
+          - switch.toggle: relay2
+
+  - platform: gpio           # KEY3 -> P2
+    name: "${device_name} key3"
+    internal: true
+    pin: { cat9554: cat9554_hub, number: 2, mode: INPUT }
+    filters: [invert, {delayed_on: 50ms}, {delayed_off: 50ms}]
+    on_click:
+      - min_length: 50ms
+        max_length: 600ms
+        then:
+          - switch.toggle: relay3
+
+  - platform: gpio           # 总按键 -> GPIO16（无内部上拉，用下拉 + 按下拉高）
+    name: "${device_name} key0"
+    internal: true
+    pin: { number: GPIO16, mode: INPUT_PULLDOWN_16 }
+    filters: [invert, {delayed_on: 50ms}, {delayed_off: 50ms}]
+    on_click:
+      - min_length: 50ms
+        max_length: 600ms
+        then:
+          - switch.toggle: relay0
+
+  - platform: template       # 影子开关：记忆总开关动作前的分路状态
+    name: "${device_name} shadow1"
+    id: shadow1
+    internal: true
+  - platform: template
+    name: "${device_name} shadow2"
+    id: shadow2
+    internal: true
+  - platform: template
+    name: "${device_name} shadow3"
+    id: shadow3
+    internal: true
+
+status_led:                  # 板载 WiFi 灯（IO0，低电平亮）
+  pin: GPIO0
+
+# ---------------- 继电器驱动（U7 P4~P7） ----------------
+output:
+  - { platform: gpio, id: out_r3, setup_priority: 900,
+      pin: { cat9554: cat9554_hub, number: 4, mode: OUTPUT } }
+  - { platform: gpio, id: out_r2, setup_priority: 900,
+      pin: { cat9554: cat9554_hub, number: 5, mode: OUTPUT } }
+  - { platform: gpio, id: out_r1, setup_priority: 900,
+      pin: { cat9554: cat9554_hub, number: 6, mode: OUTPUT } }
+  - { platform: gpio, id: out_r0, setup_priority: 900,
+      pin: { cat9554: cat9554_hub, number: 7, mode: OUTPUT } }
+
+# ---------------- 对外开关 ----------------
+# 语义与官方 App 一致：
+#   relay0 = 总开关（串在整排总回路，含 USB），关总开关会连带关 1~3 路并记忆
+#   开任一分路时若总开关未开，自动先开总开关
+switch:
+  - platform: output
+    name: "${friendly_name} 总开关"
+    id: relay0
+    output: out_r0
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - switch.turn_on: logo_light
+      - lambda: |-
+          if (id(shadow1).state) { id(relay1).turn_on(); id(shadow1).publish_state(false); }
+          if (id(shadow2).state) { id(relay2).turn_on(); id(shadow2).publish_state(false); }
+          if (id(shadow3).state) { id(relay3).turn_on(); id(shadow3).publish_state(false); }
+    on_turn_off:
+      - switch.turn_off: logo_light
+      - lambda: |-
+          if (id(relay1).state) { id(relay1).turn_off(); id(shadow1).publish_state(true); }
+          if (id(relay2).state) { id(relay2).turn_off(); id(shadow2).publish_state(true); }
+          if (id(relay3).state) { id(relay3).turn_off(); id(shadow3).publish_state(true); }
+
+  - platform: output
+    name: "${friendly_name} 插孔1"
+    id: relay1
+    output: out_r1
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - if: { condition: { switch_is_off: relay0 }, then: [ switch.turn_on: relay0 ] }
+
+  - platform: output
+    name: "${friendly_name} 插孔2"
+    id: relay2
+    output: out_r2
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - if: { condition: { switch_is_off: relay0 }, then: [ switch.turn_on: relay0 ] }
+
+  - platform: output
+    name: "${friendly_name} 插孔3"
+    id: relay3
+    output: out_r3
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - if: { condition: { switch_is_off: relay0 }, then: [ switch.turn_on: relay0 ] }
+
+  - platform: gpio             # LOGO 灯，U7 经 RELAYLED 低电平点亮
+    name: "${friendly_name} LOGO 灯"
+    id: logo_light
+    pin: { number: GPIO14, inverted: true }
+
+# =============================================================================
+# 备选：若不想用自定义组件，可删除 cat9554: 段，改为 ESPHome 原生 pca9554
+# （寄存器兼容，但 U7 是简配版，20kHz 下才稳）：
+#
+#   pca9554:
+#     - id: cat9554_hub
+#       address: 0x20
+#       irq_pin: GPIO4
+#
+# 然后把上面所有 `cat9554: cat9554_hub` 改成 `pca9554: cat9554_hub`。
+# =============================================================================
