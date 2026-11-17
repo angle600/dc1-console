@@ -197,6 +197,5 @@ sourceComponent: root.curType === "DC1" ? dc1Comp
 
 ## 许可
 
-代码 MIT。硬件照片、引脚标注与 datasheet 来自社区项目
-[Samuel-0-0/phicomm_dc1-esphome](https://github.com/Samuel-0-0/phicomm_dc1-esphome)，
-仅作个人研究与维修使用；强电操作风险自负。
+代码 MIT（见 [`LICENSE`](LICENSE)）。硬件照片、引脚标注与 datasheet 版权归原作者，
+仅作个人研究与维修引用，逐项来源见 [`NOTICE.md`](NOTICE.md)；强电操作风险自负。
