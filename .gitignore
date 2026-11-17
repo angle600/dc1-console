@@ -28,6 +28,9 @@ gui/release/
 gui/*.log
 firmware/build/
 
-# 原厂固件 dump（版权归原厂，仅本地备份）
-firmware/original/
+# 原厂固件 dump：默认忽略，只放行主人这台机器的备份与清单
+firmware/original/*
+!firmware/original/README.md
+!firmware/original/MANIFEST.json
+!firmware/original/dc1_original_1M_user.bin
 backup/
