@@ -98,9 +98,12 @@ cmake --build gui\build -j
 
 ### 1. 刷固件（仅首次需要串口）
 
+接线只需 4 根 + 1 个短接：`3V3→3.3V`、`GND→GND`、`TTL RX→LOG_TX`、`TTL TX→RX1`，
+再把 `IO0→GND` 短接进下载模式（细节与测试点位置见 [`docs/01-刷机方案.md`](docs/01-刷机方案.md) §5）。
+
 ```bash
 # 1) 备份原厂固件（拆机接 TTL，IO0 接 GND 进下载模式）
-esptool.py --port COM5 read_flash 0 0x100000 backup_dc1.bin
+esptool.py --port COM5 --before no_reset read_flash 0 0x100000 backup_dc1.bin
 
 # 2) 烧 MicroPython 1M 内核（1MB Flash 专用变体，607KB）
 python tools/mp_deploy.py --serial COM5 --erase \
