@@ -697,6 +697,19 @@ def handle(conn):
     if path == "/api/meter":
         return reply(conn, "200 OK", json.dumps(meter.state() if meter else {}))
 
+    if path == "/api/keys":
+        raw = -1
+        if u7 is not None:
+            try:
+                raw = u7.read_all()
+            except Exception as e:
+                raw = -2
+        return reply(conn, "200 OK", json.dumps({
+            "raw": raw,
+            "total_pin": pin_total.value() if pin_total is not None else -1,
+            "u7": u7 is not None,
+        }))
+
     if path == "/api/switch":
         ch = q.get("ch", "total")
         if ch not in PLUGS:
