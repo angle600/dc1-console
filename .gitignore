@@ -34,3 +34,6 @@ firmware/original/*
 !firmware/original/MANIFEST.json
 !firmware/original/dc1_original_1M_user.bin
 backup/
+
+# 设备真实配置（含 WiFi 密码）
+firmware/micropython/config.json

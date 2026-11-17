@@ -134,3 +134,40 @@ ESP8266 没有分区表，代码**就地 XIP 执行**，擦掉正在跑的扇区
 - [ ] 上机实测 + 按第 8 节标定，把默认 gain 写回 `config.example.json`
 - [ ] 把 `dc1ctl.py` 增加 `--http` 后端，与 ESPHome 固件共用一套 CLI
 - [ ] 若要整片 OTA：评估换 4MB 模组 + yaota8266/DFU 分支的可行性（需重新设计 `docs/01` 的烧写流程）
+
+## 9. 上板实测踩坑记录（2026-11-18，DC1 实机）
+
+1 MB Flash / ESP8266 的 MicroPython 堆只有 **~36 KB**，实测空闲峰值 ~7.3 KB。
+以下问题在 CPython 上测不出来，只能上板暴露：
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `MemoryError` | 24 KB 源码 `main.py` 无法现场编译 | 逻辑编译成 `app.mpy`，`main.py` 只留启动器 |
+| `MemoryError: allocating 1016` | 5.7 KB 的 HTML 常驻堆 | HTML 落到 `index.html`，按 256 B 流式发送 |
+| `AttributeError: 'bytes' object has no attribute 'partition'` | MicroPython 无 `partition` | 用 `find` + 切片 |
+| `TypeError: function doesn't take keyword arguments` | `ln.decode(errors="ignore")` | 改 `try: ln.decode()` |
+| `Pin.PULL_DOWN` 不存在 | ESP8266 无内部下拉 | `try/except` 降级为 `Pin.IN` |
+| HTTP 连接立刻 0 字节关闭 | 对 accept 出来的 socket 调 `settimeout()` 会让 `recv` 立即超时 | 用 `select.poll()` 判可读 + 阻塞 `recv` |
+| `OSError: [Errno 19] ENODEV`（I2C） | GPIO3 同时是 UART0-RX 与 U7 的 SDA | **必须先 `UART(0, tx=15, rx=13)` 再初始化 I2C** |
+| 请求处理 `MemoryError: allocating 1634` | 堆只剩 1.6 KB | `handle()` 开头 `gc.collect()`；计量与网页不要同时常驻 |
+
+### 无线迭代（不用拆机）
+
+```bash
+# TCP 推送（推荐）：POST /api/put 分片写文件，512 B/片
+python tools/tcp_push.py --ip 192.168.31.243 --file firmware/build/mpy/app.mpy --name app.mpy
+python tools/tcp_push.py --ip 192.168.31.243 --reset
+```
+
+> 1024 B/片会撞内存上限返回 400；`/api/get` 读 >5 KB 文件会 OOM（仅适合小文件校验）。
+
+### 运行时接口（实测）
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/state` | 开关/计量/能量/信号 |
+| `POST /api/switch?ch=1|2|3|total&on=0|1&t=<token>` | 总闸 OFF 会级联关分路 |
+| `GET/POST /api/config?t=<token>` | 注意参数名是 `t`，键白名单含 `hw`/`meter_enabled` |
+| `GET /api/log` | boot.log |
+| `POST /api/reboot?t=<token>` | 软重启（加载新 app.mpy） |
+| `GET /api/get?name=<file>` | 读小文件（base64） |
