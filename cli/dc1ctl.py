@@ -183,7 +183,8 @@ def cmd_prov(a):
     payload = {"t": "prov", "proto": PROTO, "ssid": a.ssid, "pass": a.password}
     if a.name:
         payload["name"] = a.name
-    targets = [a.target] if a.target else ["255.255.255.255", "192.168.4.1"]
+    one = a.target or getattr(a, "ip", None)
+    targets = [one] if one else ["255.255.255.255", "192.168.4.1"]
     res = udp_send(payload, targets, 3.0, want="prov")
     if not res:
         emit({"ok": 0, "err": "no_reply",
