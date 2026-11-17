@@ -40,6 +40,17 @@ input,select{background:#262626;color:#eee;border:1px solid #3a3a3a;border-radiu
   <button onclick="addCd()">开始</button>
 </div>
 
+<h3>WiFi 设置</h3>
+<div class="row"><span class="n">当前</span><span class="mono" id="w_now">--</span></div>
+<div class="row"><input id="w_ssid" placeholder="WiFi 名称 SSID" style="flex:1"></div>
+<div class="row"><input id="w_pass" type="password" placeholder="WiFi 密码" style="flex:1"></div>
+<div class="row"><button onclick="saveWifi()">保存并重启</button>
+  <span class="small" id="w_msg" style="flex:1;margin:0"></span></div>
+<div class="row"><input id="w_tok" placeholder="控制令牌 api_token（连上路由器后需要）" style="flex:1">
+  <button onclick="saveTok()">存令牌</button></div>
+<div class="small">首次配网：手机连热点 <b>DC1-Setup</b>（密码 <b>dc1setup</b>），
+  打开 <b>http://192.168.4.1</b> 填上面表单；连上路由器后本页地址为设备 IP。</div>
+
 <h3>电量</h3>
 <div class="row"><span class="n">累计</span><span class="mono" id="e_total">--</span></div>
 <div class="row"><span class="n">今日</span><span class="mono" id="e_today">--</span></div>
@@ -59,7 +70,7 @@ function tg(i){sel^=1<<i;days()}
 function render(s){
   var h="";
   for(var k in NAMES){h+='<div class="row"><span class="n">'+NAMES[k]+
-    '</span><button class="'+(s[k]?"on":"")+'" onclick="sw(\\''+k+'\\','+(s[k]?0:1)+')">'+
+    '</span><button class="'+(s[k]?"on":"")+'" onclick="sw(\''+k+'\','+(s[k]?0:1)+')">'+
     (s[k]?"ON":"OFF")+'</button></div>'}
   document.getElementById("sws").innerHTML=h;
   var m=s.meter||{};
@@ -68,6 +79,8 @@ function render(s){
   var e=s.energy||{};
   document.getElementById("e_total").textContent=(e.total_kwh||0)+" kWh";
   document.getElementById("e_today").textContent=(e.today_kwh||0)+" kWh";
+  document.getElementById("w_now").textContent=(s.ap?"AP 模式（未联网） ":"已联网 ")+
+    (s.ip||"")+(s.rssi?("  信号 "+s.rssi+"dBm"):"");
   h="";
   (s.schedList||[]).forEach(function(r){
     h+='<div class="row"><span class="n">'+(NAMES[r.ch]||r.ch)+' '+(r.on?"开":"关")+' '+
@@ -103,5 +116,24 @@ function addCd(){
   fetch("/api/countdown",{method:"POST",body:JSON.stringify(body)}).then(tick)
 }
 function delCd(id){fetch("/api/countdown",{method:"POST",body:JSON.stringify({op:"del",id:id})}).then(tick)}
+function tok(){return localStorage.getItem("dc1tok")||""}
+function saveTok(){
+  localStorage.setItem("dc1tok",document.getElementById("w_tok").value.trim());
+  document.getElementById("w_msg").textContent="令牌已保存在本机浏览器";
+}
+function saveWifi(){
+  var ssid=document.getElementById("w_ssid").value.trim();
+  var pass=document.getElementById("w_pass").value;
+  var msg=document.getElementById("w_msg");
+  if(!ssid){msg.textContent="请填写 SSID";return}
+  msg.textContent="保存中…";
+  fetch("/api/config?t="+encodeURIComponent(tok()),{method:"POST",
+    body:JSON.stringify({ssid:ssid,password:pass,reboot:1})})
+   .then(function(r){return r.json()})
+   .then(function(j){msg.textContent=j.ok?"已保存，设备重启中…（约 10 秒后重连）":
+     ("失败："+(j.err||"检查令牌"))})
+   .catch(function(){msg.textContent="已提交，设备正在重启…"});
+}
+document.getElementById("w_tok").value=tok();
 days();tick();setInterval(tick,3000);
 </script></body></html>

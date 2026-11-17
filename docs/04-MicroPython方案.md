@@ -171,3 +171,20 @@ python tools/tcp_push.py --ip 192.168.31.243 --reset
 | `GET /api/log` | boot.log |
 | `POST /api/reboot?t=<token>` | 软重启（加载新 app.mpy） |
 | `GET /api/get?name=<file>` | 读小文件（base64） |
+
+## 10. 配网机制（实测）
+
+三条路径，按场景区分：
+
+| 场景 | 路径 | 端口/地址 |
+|---|---|---|
+| 首次 / 无凭据 | 设备开热点 `DC1-Setup` / `dc1setup`，手机打开 `http://192.168.4.1` 用网页表单填 WiFi | AP 192.168.4.1 |
+| 上电 30 秒内 | UDP `{"t":"prov","ssid","pass"}` → 写盘并重启 | UDP 54321 |
+| 已联网 | `POST /api/config?t=<token>` `{"ssid","password","reboot":1}`；`{"wifi_reset":true}` 清凭据回 AP | HTTP 80 |
+
+要点：
+
+- **首次 `api_token` 为空 → 配网免鉴权**；连上路由器后建议在网页「存令牌」里填上 token
+- **STA 连上后必须 `AP_IF.active(False)`**：ESP8266 的 AP 默认开启且无密码，否则设备旁边永远有个开放入口
+- 有线→无线的**广播会被路由器丢弃**（实测），`cli prov` 必须让电脑先连设备热点再发（走 192.168.4.1 单播）
+- 页面 `index.html` 的 JS 是从 `webui.py` 抽取的，抽取时 `\\'` 会多留一个反斜杠导致整段 JS 语法错误，抽取后必须 `node --check` 验证
