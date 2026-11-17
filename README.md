@@ -1,5 +1,13 @@
 # DC1 Console · 斐讯 DC1 排插的内网自持方案
 
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![device](https://img.shields.io/badge/device-ESP8266%20%2F%20DC1-lightgrey)]()
+[![firmware](https://img.shields.io/badge/firmware-MicroPython%201.29-2b2728)]()
+[![gui](https://img.shields.io/badge/GUI-Qt%206.8.5%20QML-41cd52)]()
+[![ci](https://github.com/angle600/dc1-console/actions/workflows/check.yml/badge.svg)](https://github.com/angle600/dc1-console/actions/workflows/check.yml)
+
+> 仓库：<https://github.com/angle600/dc1-console>
+
 把**斐讯 DC1 智能排插**改成一台完全本地运行的设备：MicroPython 固件跑在排插上，
 手机/PC 在局域网内发现它、给它配网、控制它；上位机是 Qt 6.8（QML）桌面程序，
 业务逻辑全部在 Python CLI 里，GUI 只负责展示。
