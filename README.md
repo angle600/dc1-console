@@ -70,8 +70,8 @@
 | 目标 | 命令 | 结果 |
 |---|---|---|
 | GUI | `cmake -S gui -B gui/build -G "MinGW Makefiles" -DCMAKE_PREFIX_PATH=D:/Qt/Qt6.8.5MinGW64 ...` | ✅ `gui/build/dc1console.exe` 151 KB |
-| GUI 运行 | `DC1_DEMO=1 dc1console.exe` | ✅ 界面正常，QML 无告警（见上方截图） |
-| GUI 分发 | `windeployqt --qmldir qml --dir dist build/dc1console.exe` | ✅ `gui/dist/` 自包含 |
+| GUI 运行 | `release\dc1console.exe`（无需 Qt 在 PATH） | ✅ 界面正常，QML 无告警（见上方截图） |
+| GUI 分发 | `gui\deploy.ps1`（windeployqt + 清理 debug 库） | ✅ `gui/release/` 178 MB 自包含，隔离 PATH 实测可跑 |
 | 固件字节码 | `python -m py_compile firmware/micropython/*.py` | ✅ 6 个文件通过 |
 | 固件交叉编译 | `mpy-cross`（v1.29.0，mpy v6.3） | ✅ 生成 5 个 `.mpy`（main 9.6 KB、webui 5.7 KB…） |
 | 固件逻辑单测 | `python tests/test_store.py` | ✅ 4/4 PASS（单次/每周/倒计时/电量） |

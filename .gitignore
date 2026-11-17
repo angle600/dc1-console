@@ -24,6 +24,7 @@ backup/
 # GUI 构建产物
 gui/build/
 gui/dist/
+gui/release/
 gui/*.log
 firmware/build/
 

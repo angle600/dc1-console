@@ -31,11 +31,18 @@ cmake --build build -j
 build\dc1console.exe
 ```
 
-打包分发：
+打包成**自包含目录**（推荐，双击即用）：
 
 ```bat
-windeployqt --qmldir qml build\dc1console.exe
+cd gui
+:: 若被执行策略拦住，可先用 PowerShell 执行：Set-ExecutionPolicy -Scope Process Bypass
+.\deploy.ps1
+:: 产物：gui\release\  （约 178 MB，含 Qt6Core.dll 等 38 个库 + qml/ 模块）
+.\release\dc1console.exe
 ```
+
+目录里已经放好 `Qt6Core.dll / Qt6Gui.dll / Qt6Qml.dll / Qt6Quick*.dll`、`platforms\qwindows.dll`、
+`qml\` 模块树、`libstdc++-6.dll` 等 MinGW 运行库，**不需要 Qt 在 PATH 里**。
 
 ## 运行时定位 CLI
 
@@ -59,6 +66,7 @@ Python 解释器取 `DC1_PYTHON`，否则默认 `python`（Linux/macOS 为 `pyth
 
 | 现象 | 原因 / 处理 |
 |---|---|
+| **提示找不到 `Qt6Core.dll`** | 直接跑 `build\dc1console.exe` 就会这样——构建产物不含运行库。改跑 `release\dc1console.exe`（由 `deploy.ps1` 生成），或临时把 `D:\Qt\Qt6.8.5MinGW64\bin` 加进 PATH 调试 |
 | `Failed to start python` | Python 不在 PATH；设 `DC1_PYTHON` 或装 Python |
 | 界面空、状态栏报失败 | 先看 CLI 单独跑是否通：`python cli/dc1ctl.py discover` |
 | `Module "QtQuick.Controls" is not installed` | 用 `windeployqt --qmldir qml` 打包，或检查 `QML2_IMPORT_PATH` |
