@@ -915,6 +915,12 @@ if w is None:
     print("AP mode: %s / %s" % (cfg_get("ap_ssid"), cfg_get("ap_pass")))
 else:
     print("STA:", w.ifconfig())
+    # STA 已连上，关掉 ESP8266 默认开启的开放热点（否则旁边谁都能连）
+    try:
+        network.WLAN(network.AP_IF).active(False)
+        print("AP disabled (STA connected)")
+    except Exception as e:
+        print("ap disable fail", e)
     sntp_sync()
 
 us = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
