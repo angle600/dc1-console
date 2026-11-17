@@ -726,6 +726,8 @@ def handle(conn):
             return reply(conn, "400 Bad Request", json.dumps({"ok": 0, "err": str(e)}))
 
     if path == "/api/get":
+        if not need_token(hdrs, q):
+            return reply(conn, "401 Unauthorized", '{"err":"token"}')
         try:
             gc.collect()
         except Exception:
@@ -943,6 +945,8 @@ def handle(conn):
             return reply(conn, "500 Internal", '{"err":"%s"}' % e)
 
     if path == "/api/reboot":
+        if not need_token(hdrs, q):
+            return reply(conn, "401 Unauthorized", '{"err":"token"}')
         reset_pending = True
         return reply(conn, "200 OK", '{"ok":1}')
 

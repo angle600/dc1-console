@@ -297,6 +297,7 @@ sourceComponent: root.curType === "DC1" ? dc1Comp
 - [`docs/04-MicroPython方案.md`](docs/04-MicroPython方案.md) — 可行性与 OTA 边界
 - [`docs/05-原厂固件.md`](docs/05-原厂固件.md) — 原厂固件怎么读、镜像校验、能挖到什么
 - [`docs/06-装配与标定.md`](docs/06-装配与标定.md) — **装配前检查、装壳、计量标定、故障恢复**
+- [`docs/07-接口手册.md`](docs/07-接口手册.md) — HTTP/UDP 全部接口与鉴权、错误约定
 
 ## 许可
 

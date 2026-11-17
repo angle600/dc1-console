@@ -46,7 +46,7 @@ def get_raw(ip, path, timeout=6):
     """裸 socket 读：urllib 在设备侧偶发 RemoteDisconnected，校验用它更稳"""
     import socket as _s
     c = _s.create_connection((ip, 80), timeout=timeout)
-    c.sendall(("GET %s HTTP/1.0\r\n\r\n" % path).encode())
+    c.sendall(("GET %s HTTP/1.0\r\n\r\n" % _url(ip, path).split(ip, 1)[1]).encode())
     c.settimeout(timeout)
     d = b""
     while True:

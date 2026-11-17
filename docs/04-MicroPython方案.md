@@ -202,3 +202,18 @@ python tools/tcp_push.py --ip 192.168.31.243 --reset
 | 令牌化推送 | `tools/tcp_push.py --token <api_token>`；256 B/片在计量常开时也能过 |
 
 实测：倒计时 8 s 准点执行；单次定时到点触发并自动删除；OTA 15,911 B 回读 sha256 一致。
+
+### 10.1 AP 配网闭环实测（2026-11-18，通过）
+
+```
+POST /api/config {"wifi_reset":1}      → {"ok":1,"reboot":1}
+   ↓ 设备重启，config.ssid 为空
+热点 DC1-Setup / dc1setup（WPA2-PSK）   → PC 连上后拿到 192.168.4.x
+GET  http://192.168.4.1/               → 7709 B，含「WiFi 设置」表单
+POST http://192.168.4.1/api/config     → {"ok":1}（带 reboot:1）
+   ↓ 设备重启
+重新连上 zheng31                        → 192.168.31.243，rssi -56
+AP 自动关闭                             → 扫描不到 DC1-Setup / MicroPython-xxxx
+```
+
+注意：`prov`（UDP 30 秒窗口）此时已为 0，但 HTTP `/api/config` 不受窗口限制，仍可配网。
