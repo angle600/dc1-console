@@ -529,7 +529,8 @@ def handle(conn):
             return reply(conn, "401 Unauthorized", '{"err":"token"}')
         m = cfg.get("meter") or {}
         if js.get("reset") or q.get("reset"):
-            m.update({"v_gain": 1.0, "i_gain": 1.0, "p_gain": 1.0})
+            m.update({"v_gain": 1.0, "i_gain": 1.0, "p_gain": 1.0,
+                      "v1r": 1.0, "v2r": 1.0})
             cfg["meter"] = m
             save_json(CFG_FILE, cfg)
             set_gains()
@@ -539,6 +540,20 @@ def handle(conn):
                          '{"err":"meter_off","hint":"安全模式下未初始化 CSE7766"}')
         last = meter.state()
         changed = {}
+        # 硬件常量：V1R=采样锰铜电阻(mΩ)，V2R=分压电阻(MΩ)。
+        # 求出它们等价于"用回原厂标定"（芯片内的 Uk/Ik/Pk 已随帧下发）
+        if js.get("v1r") or q.get("v1r"):
+            v1r = float(js.get("v1r") or q.get("v1r"))
+            if v1r <= 0:
+                return reply(conn, "400 Bad Request", '{"err":"bad v1r"}')
+            m["v1r"] = round(v1r, 6)
+            changed["v1r"] = m["v1r"]
+        if js.get("v2r") or q.get("v2r"):
+            v2r = float(js.get("v2r") or q.get("v2r"))
+            if v2r <= 0:
+                return reply(conn, "400 Bad Request", '{"err":"bad v2r"}')
+            m["v2r"] = round(v2r, 6)
+            changed["v2r"] = m["v2r"]
         try:
             if js.get("voltage") or q.get("voltage"):
                 true_v = float(js.get("voltage") or q.get("voltage"))
@@ -564,7 +579,8 @@ def handle(conn):
         except Exception as e:
             return reply(conn, "400 Bad Request", '{"err":"%s"}' % e)
         if not changed:
-            return reply(conn, "400 Bad Request", '{"err":"need voltage/current/power"}')
+            return reply(conn, "400 Bad Request",
+                         '{"err":"need voltage/current/power/v1r/v2r"}')
         cfg["meter"] = m
         save_json(CFG_FILE, cfg)
         set_gains()

@@ -295,21 +295,57 @@ def cmd_time(a):
 def cmd_cal(a):
     """单点标定：用外部电表读数校正 V/A/W。"""
     host = resolve(a)
-    if not (a.power or a.voltage or a.current or a.reset):
+    if not (a.power or a.voltage or a.current or a.reset
+            or getattr(a, "v1r", None) or getattr(a, "v2r", None)
+            or getattr(a, "hardware", False)):
         r = get_json(host, "/api/cal", a.token)
         m = r.get("meter") or {}
         me = r.get("measured") or {}
         emit(r, a.json,
              "当前读数  V=%.1f A=%.3f W=%.1f\n系数  v=%.6f i=%.6f p=%.6f\n"
-             "芯片%s，异常标志 0x%x" %
+             "硬件常量 V1R=%.4f mΩ  V2R=%.4f MΩ\n芯片%s，异常标志 0x%x" %
              (me.get("voltage", 0), me.get("current", 0), me.get("power", 0),
               m.get("v_gain", 1), m.get("i_gain", 1), m.get("p_gain", 1),
+              m.get("v1r", 1), m.get("v2r", 1),
               "已校准" if r.get("calibrated") else "未校准",
               r.get("flags", 0)))
         return
+    # --hardware：不解 gain，改为求硬件常量 V1R/V2R —— 等价"用回原厂标定"
+    if getattr(a, "hardware", False):
+        if not (a.voltage or a.current):
+            sys.exit("--hardware 需要 --voltage（可再加 --current）")
+        cur = get_json(host, "/api/cal", a.token)
+        raw = cur.get("raw") or {}
+        body = {}
+        try:
+            if a.voltage:
+                uk, ut = raw.get("uk", 0), raw.get("ut", 0)
+                if not (uk and ut):
+                    raise ValueError("no_frame")
+                body["v2r"] = round(uk / (ut * a.voltage), 6)
+            if a.current:
+                ik, it = raw.get("ik", 0), raw.get("it", 0)
+                if not (ik and it):
+                    raise ValueError("no_frame")
+                body["v1r"] = round(ik / (it * a.current), 6)
+        except Exception as e:
+            sys.exit("标定失败：%s" % e)
+        r = http(host, "/api/cal", "POST", body, a.token)
+        if r.get("ok"):
+            emit(r, a.json, "已按硬件常量校准：%s（芯片出厂系数保持不变）" %
+                 json.dumps(body, ensure_ascii=False))
+        else:
+            emit(r, a.json, "失败：%s" % r.get("err"))
+            sys.exit(1)
+        return
+
     body = {}
     if a.reset:
         body["reset"] = 1
+    if getattr(a, "v1r", None):
+        body["v1r"] = a.v1r
+    if getattr(a, "v2r", None):
+        body["v2r"] = a.v2r
     if a.voltage:
         body["voltage"] = a.voltage
     if a.current:
@@ -445,7 +481,11 @@ def main():
     cal.add_argument("--voltage", type=float, help="电表测得的电压 V")
     cal.add_argument("--current", type=float, help="电表测得的电流 A")
     cal.add_argument("--power", type=float, help="电表测得的功率 W")
-    cal.add_argument("--reset", action="store_true", help="系数复位为 1.0")
+    cal.add_argument("--reset", action="store_true", help="系数/常量复位为 1.0")
+    cal.add_argument("--v1r", type=float, help="采样锰铜电阻 mΩ（硬件常量）")
+    cal.add_argument("--v2r", type=float, help="分压电阻 MΩ（硬件常量）")
+    cal.add_argument("--hardware", action="store_true",
+                     help="按电表读数反求 V1R/V2R（保留芯片出厂系数，等价原厂标定）")
     cal.set_defaults(func=cmd_cal)
     sub.add_parser("time", parents=[common]).set_defaults(func=cmd_time)
     sub.add_parser("reboot", parents=[common]).set_defaults(func=cmd_reboot)

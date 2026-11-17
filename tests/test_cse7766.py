@@ -99,6 +99,18 @@ def test_resync_and_checksum():
     print("PASS resync_and_checksum")
 
 
+def test_hardware_constants():
+    # V2R=2（2MΩ 分压）、V1R=1.5（1.5mΩ 采样）→ 读数按比例缩小
+    frame = make_frame(2_200_000, 10000, 3600, 20000, 800_000, 20000)
+    m = CSE7766(FakeUART(frame), v1r=1.5, v2r=2.0)
+    m.poll()
+    st = m.state()
+    assert abs(st["voltage"] - 110.0) < 0.05, st
+    assert abs(st["current"] - 0.12) < 0.001, st
+    assert abs(st["power"] - 13.333) < 0.05, st
+    print("PASS hardware_constants")
+
+
 def test_uncalibrated_header():
     frame = make_frame(2_200_000, 10000, 3600, 20000, 800_000, 20000, header=0xAA)
     m = CSE7766(FakeUART(frame))
@@ -112,5 +124,6 @@ if __name__ == "__main__":
     test_no_load()
     test_gain_applied()
     test_resync_and_checksum()
+    test_hardware_constants()
     test_uncalibrated_header()
     print("all cse7766 tests passed")

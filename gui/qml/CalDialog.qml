@@ -12,7 +12,7 @@ Dialog {
     closePolicy: Popup.CloseOnEscape
 
     property var meter: ({})
-    signal apply(string kind, real value)
+    signal apply(string kind, real value, bool hardware)
 
     readonly property var kinds: [
         { k: "power", t: qsTr("功率 (W)"), v: meter.power },
@@ -30,7 +30,8 @@ Dialog {
             color: "#8a92a6"
             font.pixelSize: 12
             text: qsTr("设备当前读数：V=%1  A=%2  W=%3\n" +
-                       "填外部电表测到的同一物理量，点「写入系数」即可（gain = 真值 × 周期 ÷ 系数）。")
+                       "填外部电表测到的同一物理量。默认按原厂标定只求 V1R/V2R；" +
+                       "取消勾选则改 gain（两者等价，前者更贴近手册语义）。")
                   .arg(meter.voltage === undefined ? "--" : meter.voltage)
                   .arg(meter.current === undefined ? "--" : meter.current)
                   .arg(meter.power === undefined ? "--" : meter.power)
@@ -57,6 +58,13 @@ Dialog {
                 validator: DoubleValidator { bottom: 0.001; top: 10000; decimals: 3 }
                 font.family: "Consolas"
             }
+        }
+
+        CheckBox {
+            id: hw
+            text: qsTr("按原厂标定：只反求硬件常量 V1R/V2R（芯片出厂系数不动）")
+            checked: true
+            font.pixelSize: 11
         }
 
         Rectangle {
@@ -88,7 +96,7 @@ Dialog {
                 highlighted: true
                 enabled: real.acceptableInput
                 onClicked: {
-                    dlg.apply(dlg.kinds[kind.currentIndex].k, Number(real.text))
+                    dlg.apply(dlg.kinds[kind.currentIndex].k, Number(real.text), hw.checked)
                     dlg.close()
                 }
             }

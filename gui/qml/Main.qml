@@ -393,8 +393,11 @@ ApplicationWindow {
     CalDialog {
         id: calDlg
         meter: root.st.meter || ({})
-        onApply: function (kind, value) {
-            var a = ["cal", "--ip", root.curIp, "--json", "--" + kind, String(value)]
+        onApply: function (kind, value, hardware) {
+            var a = ["cal", "--ip", root.curIp, "--json"]
+            if (hardware)
+                a.push("--hardware")
+            a.push("--" + kind, String(value))
             root.call("cal", a)
         }
     }
