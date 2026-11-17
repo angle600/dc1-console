@@ -93,7 +93,7 @@ class Sched:
         key = "%04d%02d%02d%02d%02d" % (lt[0], lt[1], lt[2], lt[3], lt[4])
         if key == self._last_key:
             return []
-        dow = (lt[6] - 1) % 7 if lt[6] >= 1 else 6      # ls[6]: 0=周一
+        dow = lt[6] % 7                                  # localtime()[6]: 0=周一
         out = []
         once_ids = []
         for r in self.rules:

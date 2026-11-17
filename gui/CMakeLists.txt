@@ -19,8 +19,9 @@ qt_add_executable(dc1console
     clirunner.h
 )
 
+# 资源路径即 qrc:/qml/Main.qml（prefix "/" + 文件相对路径 qml/...）
 qt_add_resources(dc1console "qml"
-    PREFIX "/qml"
+    PREFIX "/"
     FILES
         qml/Main.qml
         qml/Dc1Panel.qml

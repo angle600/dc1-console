@@ -39,6 +39,12 @@
 | 上位机 | 发现设备、按 `type` 选界面、配网、开关、定时、倒计时、电量、**WiFi 更新固件** |
 | 扩展 | 设备类型由 `type` + `features` 驱动，新增类型只需加一个 Panel |
 
+## 界面
+
+![上位机界面](gui/screenshot.png)
+
+> 截图由 `DC1_DEMO=1 dc1console.exe` 生成（演示数据，不连真实设备）。
+
 ## 目录
 
 ```
@@ -58,6 +64,35 @@
 ├── docs/                         # 刷机 / 配网 / AI 控制 / MicroPython 方案
 └── tools/                        # mp_deploy.py（串口烧内核）等辅助脚本
 ```
+
+## 编译与自检（本机已验证）
+
+| 目标 | 命令 | 结果 |
+|---|---|---|
+| GUI | `cmake -S gui -B gui/build -G "MinGW Makefiles" -DCMAKE_PREFIX_PATH=D:/Qt/Qt6.8.5MinGW64 ...` | ✅ `gui/build/dc1console.exe` 151 KB |
+| GUI 运行 | `DC1_DEMO=1 dc1console.exe` | ✅ 界面正常，QML 无告警（见上方截图） |
+| GUI 分发 | `windeployqt --qmldir qml --dir dist build/dc1console.exe` | ✅ `gui/dist/` 自包含 |
+| 固件字节码 | `python -m py_compile firmware/micropython/*.py` | ✅ 6 个文件通过 |
+| 固件交叉编译 | `mpy-cross`（v1.29.0，mpy v6.3） | ✅ 生成 5 个 `.mpy`（main 9.6 KB、webui 5.7 KB…） |
+| 固件逻辑单测 | `python tests/test_store.py` | ✅ 4/4 PASS（单次/每周/倒计时/电量） |
+
+实测环境：CMake 3.26.4 + MinGW-w64 GCC 13.1.0（UCRT）+ Qt 6.8.5 MinGW64。
+
+```bat
+:: 一条命令（工具链都在 D://Qt 下）
+set MINGW=D://Qt//winlibs-x86_64-posix-seh-gcc-13.1.0-llvm-16.0.5-mingw-w64ucrt-11.0.0-r5//mingw64//bin
+set PATH=%MINGW%;D://Qt//Qt6.8.5MinGW64//bin;%PATH%
+cmake -S gui -B gui\build -G "MinGW Makefiles" ^
+      -DCMAKE_BUILD_TYPE=Release ^
+      -DCMAKE_PREFIX_PATH=D:/Qt/Qt6.8.5MinGW64 ^
+      -DCMAKE_CXX_COMPILER=%MINGW%/g++.exe ^
+      -DCMAKE_MAKE_PROGRAM=%MINGW%/mingw32-make.exe
+cmake --build gui\build -j
+```
+
+> **固件 `.bin` 没有在本机产出**：ESP8266 内核需 `xtensa-lx106-elf-gcc` 交叉工具链（本机未安装）。
+> 需要时用官方 1M 变体（607 KB）或按第 6 节命令自行编译；日常更新用 `fw update`（`.py`/`.mpy`）即可。
+
 
 ## 快速开始
 
@@ -98,6 +133,7 @@ python cli/dc1ctl.py sched add --ch total --on 1 --at 07:30 --days 1,2,3,4,5  # 
 python cli/dc1ctl.py countdown add --ch 1 --on 0 --min 30               # 30 分钟后关
 python cli/dc1ctl.py time                            # 校时（定时功能依赖）
 python cli/dc1ctl.py fw update --ip 192.168.1.9      # WiFi 覆盖源码
+python cli/dc1ctl.py fw update --mpy --ip 192.168.1.9  # 传 mpy 产物（省 RAM，main.py 仍传源码）
 ```
 
 所有命令加 `--json` 输出机器可读结果——GUI 就是靠这个契约工作的。

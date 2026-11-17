@@ -270,12 +270,14 @@ Item {
                         RadioButton {
                             id: rbOnce
                             text: qsTr("单次")
+                            spacing: 6
                             checked: true
                             onCheckedChanged: panel.onceMode = checked
                         }
                         RadioButton {
                             id: rbWeek
                             text: qsTr("每周重复")
+                            spacing: 6
                             onCheckedChanged: if (checked) panel.onceMode = false
                         }
 

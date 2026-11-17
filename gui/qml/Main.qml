@@ -122,6 +122,28 @@ ApplicationWindow {
         }
     }
 
+    Component.onCompleted: {
+        if (DemoMode) {
+            devices = [{ name: "客厅排插", type: "DC1", id: "dc1-a1b2",
+                         ip: "192.168.1.9", fw: "1.1.0", prov: 0 },
+                       { name: "卧室排插", type: "DC1", id: "dc1-c3d4",
+                         ip: "192.168.1.10", fw: "1.1.0", prov: 1 }]
+            curIp = "192.168.1.9"
+            curType = "DC1"
+            curName = "客厅排插"
+            status = qsTr("演示模式 · 未连接真实设备")
+            st = { type: "DC1", fw: "1.1.0", ip: "192.168.1.9", rssi: -58,
+                   total: true, "1": true, "2": false, "3": true, logo: true,
+                   ap: 0, prov: 0,
+                   meter: { voltage: 220.4, current: 0.271, power: 59.8 },
+                   energy: { total_kwh: 12.483, today_kwh: 0.912 },
+                   cd: [{ id: 2, ch: "1", on: false, left: 843 }],
+                   sched: 2 }
+            rules = [{ id: 1, ch: "total", on: true, hh: 7, mm: 30, days: 31, en: 1 },
+                     { id: 2, ch: "1", on: false, hh: 23, mm: 0, days: 0, en: 1 }]
+        }
+    }
+
     // ------------------------------------------------------------ 布局
     RowLayout {
         anchors.fill: parent
@@ -292,11 +314,21 @@ ApplicationWindow {
                     }
                 }
 
+                Text {
+                    visible: root.curType === ""
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    color: root.dim
+                    font.pixelSize: 14
+                    text: qsTr("先点左侧「发现设备」（设备需与本机同一网段）")
+                }
+
                 Loader {
                     id: pageLoader
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    sourceComponent: root.curType === "DC1" ? dc1Comp : genericComp
+                    sourceComponent: root.curType === "" ? null
+                                   : root.curType === "DC1" ? dc1Comp : genericComp
                 }
             }
         }

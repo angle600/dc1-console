@@ -315,6 +315,7 @@ def cmd_fw(a):
         sys.exit("目录不存在：%s" % d)
     names = a.only or ["main.py", "store.py", "cat9554.py", "cse7766.py",
                        "webui.py", "config.json"]
+    mpy_dir = pathlib.Path(a.mpy_dir or (ROOT / "firmware" / "build" / "mpy"))
     ok, fail = [], []
     for n in names:
         p = d / n
@@ -323,16 +324,21 @@ def cmd_fw(a):
                 continue
             fail.append((n, "missing"))
             continue
-        url = "http://%s/api/file?name=%s" % (host, urllib.parse.quote(n))
-        req = urllib.request.Request(url, data=p.read_bytes(), method="PUT")
+        up_name, payload = n, p.read_bytes()
+        if a.mpy and n.endswith(".py") and n != "main.py":
+            m = mpy_dir / (n[:-3] + ".mpy")
+            if m.exists():
+                up_name, payload = m.name, m.read_bytes()
+        url = "http://%s/api/file?name=%s" % (host, urllib.parse.quote(up_name))
+        req = urllib.request.Request(url, data=payload, method="PUT")
         if a.token:
             req.add_header("X-Token", a.token)
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
                 json.loads(r.read().decode())
-            ok.append(n)
+            ok.append(up_name)
             if not a.json:
-                print("OK   %-14s %6d B" % (n, p.stat().st_size))
+                print("OK   %-14s %6d B" % (up_name, len(payload)))
         except Exception as e:
             fail.append((n, str(e)))
             if not a.json:
@@ -409,6 +415,9 @@ def main():
     fw.add_argument("--only", nargs="*")
     fw.add_argument("--serial")
     fw.add_argument("--img")
+    fw.add_argument("--mpy", action="store_true",
+                    help="上传 mpy-cross 产物（main.py 仍传源码）")
+    fw.add_argument("--mpy-dir", help="mpy 目录，默认 firmware/build/mpy")
     fw.set_defaults(func=cmd_fw)
 
     a = p.parse_args()

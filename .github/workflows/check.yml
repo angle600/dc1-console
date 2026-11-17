@@ -22,6 +22,9 @@ jobs:
             tools/dc1ctl.py \
             firmware/micropython/*.py
 
+      - name: 固件逻辑单测（定时单次/每周、倒计时、电量）
+        run: python tests/test_store.py
+
       - name: JSON 配置校验
         run: |
           python - <<'PY'
