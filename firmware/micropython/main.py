@@ -1,16 +1,11 @@
-"""斐讯 DC1 智能排插 —— MicroPython 固件（ESP8266 1MB）
+"""斐讯 DC1 智能排插 —— MicroPython 固件 v1.1（ESP8266 1MB）
 
-功能：
-  * 手机 AP 配网（热点 DC1-Setup + DNS 劫持 + 网页配置），无 App
-  * HTTP JSON API：/api/state、/api/switch?ch=&on=
-  * WiFi 更新代码：PUT /api/file?name=main.py（不需串口/WebREPL）
-  * 4 路继电器（U7 P4~P7）+ 3 个分路按键 + 总按键 + LOGO 灯
-  * CSE7766 计量（原始计数 + 可标定系数）
-
-⚠ 救援模式：上电时**按住总按键(GPIO16)** 不进计量初始化 —— 因为 CSE7766 需要把 UART0
-  swap 到 GPIO15/13，swap 后串口 REPL 会一起搬到那两个脚，USB 口就没 REPL 了。
-  按住总键启动 = 保留 GPIO1/3 上的 REPL，方便串口救砖。
-⚠ 1MB Flash 无法做整片固件 WiFi 烧写（详见 docs/04-MicroPython方案.md）。
+对外能力（内网自持，无云）：
+  * UDP 54321 广播发现：{"t":"discover"} → 回设备信息（type="DC1" 可扩展）
+  * 上电 **30 秒内**接受 UDP 配网：{"t":"prov","ssid":..,"pass":..}
+  * HTTP JSON API：开关 / 定时（单次或周一~周日重复）/ 倒计时 / 电量
+  * PUT /api/file：WiFi 覆盖源码（MicroPython 无整片 OTA 的替代）
+  * 救援模式：上电按住总键(GPIO16) → 跳过 CSE7766 的 UART swap，串口 REPL 保留
 """
 
 import gc
@@ -19,34 +14,43 @@ import socket
 import time
 import sys
 
-from machine import Pin, I2C, UART
+import machine
 import network
+from machine import Pin, I2C, UART
 
 from cat9554 import CAT9554, KEY1, KEY2, KEY3, RELAY0, RELAY1, RELAY2, RELAY3
 from cse7766 import CSE7766
+import store
 import webui
 
+FW_VERSION = "1.1.0"
+TYPE = "DC1"
+UDP_PORT = 54321
+PROV_WINDOW_MS = 30000
 CFG_FILE = "config.json"
 STATE_FILE = "state.json"
+
 PLUGS = ("total", "1", "2", "3", "logo")
 RELAY_BIT = {"1": RELAY1, "2": RELAY2, "3": RELAY3, "total": RELAY0}
 KEY_BIT = {"1": KEY1, "2": KEY2, "3": KEY3}
 
 DEFAULT_CFG = {
     "ssid": "", "password": "", "ap_ssid": "DC1-Setup", "ap_pass": "dc1setup",
-    "ap_timeout_s": 120, "hostname": "dc1", "http_port": 80,
-    "api_token": "", "webrepl": False,
+    "name": "DC1", "hostname": "dc1", "http_port": 80, "api_token": "",
     "meter": {"v_gain": 1.0, "i_gain": 1.0, "p_gain": 1.0},
 }
 
+boot_ms = time.ticks_ms()
 state = {"total": False, "1": False, "2": False, "3": False, "logo": False}
 shadow = {"1": False, "2": False, "3": False}
-boot_ms = time.ticks_ms()
+w = None
 ap_mode = False
+prov_open = True
 reset_pending = False
+uid = "dc1-0000"
 
 
-# ---------------------------------------------------------------- 配置 / 状态
+# ---------------------------------------------------------------- 小工具
 def load_json(path, default):
     try:
         with open(path) as f:
@@ -68,35 +72,58 @@ def cfg_get(k):
     return cfg.get(k, DEFAULT_CFG.get(k))
 
 
-def apply_cfg():
-    m = cfg.get("meter") or {}
-    for k in ("v_gain", "i_gain", "p_gain"):
-        m.setdefault(k, 1.0)
-    cfg["meter"] = m
+def mac_str():
+    return ":".join("%02x" % b for b in machine.unique_id())
+
+
+def sntp_sync(host="ntp.aliyun.com"):
+    try:
+        ai = socket.getaddrinfo(host, 123)[0][-1]
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(2)
+        pkt = bytearray(48)
+        pkt[0] = 0x1B
+        s.sendto(pkt, ai)
+        d, _ = s.recvfrom(48)
+        s.close()
+        if len(d) < 48:
+            return False
+        sec = int.from_bytes(d[40:44], "big") - 2208988800 + 8 * 3600
+        t = time.gmtime(sec)
+        machine.RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
+        return True
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------- 硬件
-i2c = I2C(scl=Pin(12), sda=Pin(3), freq=20000)   # U7 简配片，只能 20kHz
+i2c = I2C(scl=Pin(12), sda=Pin(3), freq=20000)      # U7 简配片，只能 20kHz
 u7 = CAT9554(i2c, 0x20)
 for p in (KEY1, KEY2, KEY3):
     u7.set_input(p)
+
 relay_state = {k: False for k in RELAY_BIT}
-logo = Pin(14, Pin.OUT, value=1)                  # 低电平点亮
-pin_total = Pin(16, Pin.IN, Pin.PULL_DOWN)        # 总按键：按下为高
+logo = Pin(14, Pin.OUT, value=1)                    # 低电平点亮
+pin_total = Pin(16, Pin.IN, Pin.PULL_DOWN)          # 总按键：按下为高
 
 meter = None
-if not pin_total.value():                          # 未按住总键 → 正常启计量
+if not pin_total.value():
     try:
-        # 必须 swap 到 GPIO15/13，注意 REPL 会一起搬走
-        uart = UART(0, baudrate=4800, bits=8, parity=0, stop=1, tx=15, rx=13,
-                    timeout=200)
-        m = cfg.get("meter") or {}
-        meter = CSE7766(uart, m.get("v_gain", 1.0), m.get("i_gain", 1.0),
-                        m.get("p_gain", 1.0))
+        _u = UART(0, baudrate=4800, bits=8, parity=0, stop=1, tx=15, rx=13,
+                  timeout=200)
+        meter = CSE7766(_u)
     except Exception as e:
-        print("CSE7766 init failed:", e)
+        print("cse7766 init fail:", e)
 else:
-    print("SAFE MODE: 总键按住，跳过 UART swap，串口 REPL 保留")
+    print("SAFE MODE: 总键按住，跳过 UART swap")
+
+
+def set_gains():
+    m = cfg.get("meter") or {}
+    if meter:
+        meter.v_gain = float(m.get("v_gain", 1.0))
+        meter.i_gain = float(m.get("i_gain", 1.0))
+        meter.p_gain = float(m.get("p_gain", 1.0))
 
 
 def relay_write(ch, on):
@@ -113,13 +140,12 @@ def save_state():
     save_json(STATE_FILE, state)
 
 
-def set_plug(ch, on, _internal=False):
-    """总闸/分路互锁 + 断电记忆，语义与官方 App 一致。"""
+def set_plug(ch, on):
+    """总闸/分路互锁 + 断电记忆（语义同官方 App）"""
     if ch == "logo":
         logo_write(on)
         save_state()
-        return
-
+        return True
     if ch == "total":
         if on:
             relay_write("total", True)
@@ -138,10 +164,9 @@ def set_plug(ch, on, _internal=False):
             logo_write(False)
         state["total"] = relay_state["total"]
         save_state()
-        return
-
+        return True
     if ch not in ("1", "2", "3"):
-        raise ValueError("bad ch")
+        return False
     if on and not relay_state["total"]:
         relay_write("total", True)
         state["total"] = True
@@ -149,31 +174,26 @@ def set_plug(ch, on, _internal=False):
     relay_write(ch, on)
     state[ch] = relay_state[ch]
     save_state()
+    return True
 
 
 def restore_state():
-    s = load_json(STATE_FILE, None)
-    if not s:
-        return
-    for k in PLUGS:
+    s = load_json(STATE_FILE, None) or {}
+    if s.get("total"):
+        relay_write("total", True)
+        state["total"] = True
+    for k in ("1", "2", "3"):
         if s.get(k):
-            if k == "total":
-                relay_write("total", True)
-                state["total"] = True
-            elif k in ("1", "2", "3"):
-                relay_write(k, True)
-                state[k] = True
-            elif k == "logo":
-                logo_write(True)
-
-
-restore_state()
+            relay_write(k, True)
+            state[k] = True
+    if s.get("logo"):
+        logo_write(True)
 
 
 # ---------------------------------------------------------------- 按键
 key_prev = {"1": 1, "2": 1, "3": 1}
 key_t = {"1": 0, "2": 0, "3": 0}
-tot_prev = 0
+tot_prev = pin_total.value()
 tot_t = 0
 DEBOUNCE = 50
 
@@ -183,90 +203,109 @@ def poll_keys():
     raw = u7.read_all()
     now = time.ticks_ms()
     for ch, bit in KEY_BIT.items():
-        v = (raw >> bit) & 1                 # 低有效
+        v = (raw >> bit) & 1
         if v != key_prev[ch]:
             key_prev[ch] = v
             key_t[ch] = now
-        elif v == 0 and time.ticks_diff(now, key_t[ch]) > DEBOUNCE:
-            if key_t[ch] and time.ticks_diff(now, key_t[ch]) < 1200:
-                key_t[ch] = 0                # 一次按下只触发一次
-                set_plug(ch, not state[ch])
+        elif v == 0 and key_t[ch] and time.ticks_diff(now, key_t[ch]) > DEBOUNCE:
+            key_t[ch] = 0
+            set_plug(ch, not state[ch])
     v = pin_total.value()
     if v != tot_prev:
         tot_prev = v
         tot_t = now
-    elif v == 1 and time.ticks_diff(now, tot_t) > DEBOUNCE:
-        if tot_t and time.ticks_diff(now, tot_t) < 1200:
-            tot_t = 0
-            set_plug("total", not state["total"])
+    elif v == 1 and tot_t and time.ticks_diff(now, tot_t) > DEBOUNCE:
+        tot_t = 0
+        set_plug("total", not state["total"])
 
 
 # ---------------------------------------------------------------- 网络
 def wifi_sta():
-    w = network.WLAN(network.STA_IF)
-    w.active(True)
-    if cfg.get("hostname"):
-        try:
-            w.config(dhcp_hostname=cfg["hostname"])
-        except Exception:
-            pass
+    s = network.WLAN(network.STA_IF)
+    s.active(True)
+    try:
+        s.config(dhcp_hostname=cfg_get("hostname"))
+    except Exception:
+        pass
     if not cfg.get("ssid"):
         return None
     try:
-        w.connect(cfg["ssid"], cfg["password"])
+        s.connect(cfg["ssid"], cfg["password"])
     except Exception:
         return None
     t0 = time.ticks_ms()
-    while not w.isconnected():
-        if time.ticks_diff(time.ticks_ms(), t0) > 12000:
+    while not s.isconnected():
+        if time.ticks_diff(time.ticks_ms(), t0) > 15000:
             return None
         time.sleep_ms(200)
-    return w
+    return s
 
 
 def wifi_ap():
     a = network.WLAN(network.AP_IF)
     a.active(True)
     try:
-        a.config(essid=cfg_get("ap_ssid"), password=cfg_get("ap_pass"),
-                 authmode=3)
+        a.config(essid=cfg_get("ap_ssid"), password=cfg_get("ap_pass"), authmode=3)
     except Exception:
         a.config(essid=cfg_get("ap_ssid"), password=cfg_get("ap_pass"))
     a.ifconfig(("192.168.4.1", "255.255.255.0", "192.168.4.1", "192.168.4.1"))
     return a
 
 
-def dns_socket():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setblocking(False)
+def ip_now():
+    if ap_mode:
+        return "192.168.4.1"
     try:
-        s.bind(("0.0.0.0", 53))
+        return w.ifconfig()[0]
     except Exception:
-        return None
-    return s
+        return "0.0.0.0"
 
 
-def dns_answer(s):
-    """把所有域名都解析到 192.168.4.1，触发手机强制门户。"""
+def info_obj():
+    return {"t": "dev", "proto": 1, "type": TYPE, "id": uid,
+            "name": cfg_get("name"), "fw": FW_VERSION, "mac": mac_str(),
+            "ip": ip_now(), "port": int(cfg_get("http_port")),
+            "prov": 1 if prov_open else 0,
+            "features": ["switch", "schedule", "countdown", "meter", "energy",
+                         "ota-py", "prov-udp"]}
+
+
+# ---------------------------------------------------------------- UDP：发现+配网
+def udp_serve(sock):
+    global reset_pending
     try:
-        data, addr = s.recvfrom(256)
+        data, addr = sock.recvfrom(512)
     except Exception:
         return
-    if len(data) < 13:
+    if not data:
         return
-    i = 12
-    while i < len(data) and data[i]:
-        i += data[i] + 1
-    qend = i + 5
-    if qend > len(data):
-        return
-    rsp = (data[:2] + b"\x81\x80" + b"\x00\x01\x00\x01\x00\x00\x00\x00" +
-           data[12:qend] + b"\xc0\x0c" + b"\x00\x01\x00\x01" +
-           b"\x00\x00\x00\x3c" + b"\x00\x04" + bytes([192, 168, 4, 1]))
     try:
-        s.sendto(rsp, addr)
+        req = json.loads(data.decode())
     except Exception:
-        pass
+        return
+    t = req.get("t")
+    if t in ("discover", "who"):
+        try:
+            sock.sendto(json.dumps(info_obj()).encode(), addr)
+        except Exception:
+            pass
+    elif t == "prov":
+        if not prov_open:
+            msg = '{"t":"prov","ok":0,"err":"window_closed"}'
+        elif not req.get("ssid"):
+            msg = '{"t":"prov","ok":0,"err":"no_ssid"}'
+        else:
+            cfg["ssid"] = req["ssid"]
+            cfg["password"] = req.get("pass") or ""
+            if req.get("name"):
+                cfg["name"] = req["name"]
+            save_json(CFG_FILE, cfg)
+            msg = '{"t":"prov","ok":1}'
+            reset_pending = True
+        try:
+            sock.sendto(msg.encode(), addr)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------- HTTP
@@ -301,8 +340,8 @@ def reply(conn, code, body, ctype="application/json; charset=utf-8"):
     if isinstance(body, str):
         body = body.encode()
     head = ("HTTP/1.0 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n"
-            "Connection: close\r\nCache-Control: no-store\r\n\r\n" %
-            (code, ctype, len(body)))
+            "Access-Control-Allow-Origin: *\r\nConnection: close\r\n"
+            "Cache-Control: no-store\r\n\r\n" % (code, ctype, len(body)))
     try:
         conn.send(head.encode() + body)
     except Exception:
@@ -313,22 +352,27 @@ def state_json():
     d = {k: bool(v) for k, v in state.items()}
     d["meter"] = meter.state() if meter else {"voltage": 0, "current": 0,
                                               "power": 0}
-    d["ip"] = w.ifconfig()[0] if (w is not None) else "192.168.4.1"
+    d["energy"] = energy.state()
+    d["cd"] = cd.all()
+    d["sched"] = len(sched.all())
+    d["type"] = TYPE
+    d["fw"] = FW_VERSION
+    d["ip"] = ip_now()
+    d["ap"] = 1 if ap_mode else 0
+    d["prov"] = 1 if prov_open else 0
+    d["time"] = int(time.time())
     try:
-        d["rssi"] = w.status("rssi") if w is not None else 0
+        d["rssi"] = w.status("rssi") if w else 0
     except Exception:
         d["rssi"] = 0
-    d["uptime"] = time.ticks_diff(time.ticks_ms(), boot_ms) // 1000
-    d["ap"] = ap_mode
     return json.dumps(d)
 
 
-def check_token(headers, q):
+def need_token(hdrs, q):
     want = cfg.get("api_token") or ""
     if not want:
         return True
-    got = q.get("t") or headers.get("x-token", "")
-    return got == want
+    return (q.get("t") or hdrs.get("x-token", "")) == want
 
 
 def handle(conn):
@@ -348,10 +392,10 @@ def handle(conn):
     head, _, body = data.partition(b"\r\n\r\n")
     lines = head.split(b"\r\n")
     try:
-        parts = lines[0].decode().split(" ")
-        method, target = parts[0], parts[1]
+        p = lines[0].decode().split(" ")
+        method, target = p[0], p[1]
     except Exception:
-        return reply(conn, "400 Bad Request", '{"err":"bad request"}')
+        return reply(conn, "400 Bad Request", '{"err":"bad"}')
 
     hdrs = {}
     clen = 0
@@ -379,49 +423,116 @@ def handle(conn):
             need -= len(chunk)
 
     path, q = parse_qs(target)
+    js = {}
+    if body:
+        try:
+            js = json.loads(body.decode())
+        except Exception:
+            js = {}
 
     if path in ("/", "/index.html"):
         return reply(conn, "200 OK", webui.PAGE, "text/html; charset=utf-8")
-
     if path == "/api/ping":
-        return reply(conn, "200 OK", '{"ok":1,"name":"dc1-mpy"}')
-
+        return reply(conn, "200 OK", '{"ok":1,"type":"%s","fw":"%s"}'
+                     % (TYPE, FW_VERSION))
+    if path == "/api/info":
+        return reply(conn, "200 OK", json.dumps(info_obj()))
     if path == "/api/state":
         return reply(conn, "200 OK", state_json())
+    if path == "/api/energy":
+        return reply(conn, "200 OK", json.dumps(energy.state()))
+    if path == "/api/meter":
+        return reply(conn, "200 OK", json.dumps(meter.state() if meter else {}))
 
     if path == "/api/switch":
         ch = q.get("ch", "total")
         if ch not in PLUGS:
             return reply(conn, "400 Bad Request", '{"err":"bad ch"}')
         on = q.get("on", "1") in ("1", "true", "on", "ON")
-        try:
-            set_plug(ch, on)
-        except Exception as e:
-            return reply(conn, "500 Internal", '{"err":"%s"}' % e)
+        set_plug(ch, on)
         return reply(conn, "200 OK", state_json())
 
-    if path == "/api/meter":
-        return reply(conn, "200 OK", json.dumps(meter.state() if meter else {}))
+    # 定时：days=0 单次（触发后自动删除）；days 位掩码 bit0=周一...
+    if path == "/api/schedule":
+        if method == "GET":
+            return reply(conn, "200 OK", json.dumps(sched.all()))
+        op = js.get("op")
+        try:
+            if op == "add":
+                return reply(conn, "200 OK",
+                             json.dumps({"ok": 1, "rule": sched.add(js)}))
+            if op == "del":
+                return reply(conn, "200 OK", json.dumps(
+                    {"ok": 1, "removed": sched.rm(int(js.get("id", 0)))}))
+            if op == "en":
+                return reply(conn, "200 OK", json.dumps(
+                    {"ok": 1, "changed": sched.enable(int(js.get("id", 0)),
+                                                      js.get("en", 1))}))
+            if op == "clear":
+                for r in list(sched.all()):
+                    sched.rm(r["id"])
+                return reply(conn, "200 OK", '{"ok":1}')
+        except Exception as e:
+            return reply(conn, "400 Bad Request", '{"err":"%s"}' % e)
+        return reply(conn, "400 Bad Request", '{"err":"bad op"}')
+
+    if path == "/api/countdown":
+        if method == "GET":
+            return reply(conn, "200 OK", json.dumps(cd.all()))
+        op = js.get("op")
+        try:
+            if op == "add":
+                it = cd.add(js.get("ch", "1"), js.get("on", 0),
+                            int(js.get("sec", 60)))
+                return reply(conn, "200 OK", json.dumps({"ok": 1, "item": it}))
+            if op == "del":
+                return reply(conn, "200 OK", json.dumps(
+                    {"ok": 1, "removed": cd.rm(int(js.get("id", 0)))}))
+            if op == "clear":
+                cd.clear()
+                return reply(conn, "200 OK", '{"ok":1}')
+        except Exception as e:
+            return reply(conn, "400 Bad Request", '{"err":"%s"}' % e)
+        return reply(conn, "400 Bad Request", '{"err":"bad op"}')
+
+    if path == "/api/time":
+        try:
+            ep = int(js.get("epoch") or q.get("epoch") or 0)
+            if ep > 1600000000:
+                t = time.gmtime(ep + 8 * 3600)
+                machine.RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4],
+                                        t[5], 0))
+                return reply(conn, "200 OK", '{"ok":1}')
+        except Exception as e:
+            return reply(conn, "400 Bad Request", '{"err":"%s"}' % e)
+        return reply(conn, "400 Bad Request", '{"err":"bad epoch"}')
 
     if path == "/api/config":
-        if not check_token(hdrs, q):
+        if not need_token(hdrs, q):
             return reply(conn, "401 Unauthorized", '{"err":"token"}')
         if method == "GET":
-            safe = {k: cfg.get(k) for k in cfg if k not in ("password",)}
-            return reply(conn, "200 OK", json.dumps(safe))
-        try:
-            new = json.loads(body.decode())
-        except Exception:
-            return reply(conn, "400 Bad Request", '{"err":"json"}')
-        for k, v in new.items():
-            cfg[k] = v
-        apply_cfg()
+            return reply(conn, "200 OK", json.dumps(
+                {k: cfg.get(k) for k in cfg if k != "password"}))
+        if js.get("wifi_reset"):
+            cfg["ssid"] = ""
+            cfg["password"] = ""
+            save_json(CFG_FILE, cfg)
+            reset_pending = True
+            return reply(conn, "200 OK", '{"ok":1,"reboot":1}')
+        for k, v in js.items():
+            if k in ("ssid", "password", "name", "ap_ssid", "ap_pass",
+                     "api_token", "http_port", "hostname"):
+                cfg[k] = v
+            elif k == "meter":
+                cfg["meter"] = v
         save_json(CFG_FILE, cfg)
-        reset_pending = True
-        return reply(conn, "200 OK", '{"ok":1,"reboot":1}')
+        set_gains()
+        if js.get("reboot"):
+            reset_pending = True
+        return reply(conn, "200 OK", '{"ok":1}')
 
     if path == "/api/file":
-        if not check_token(hdrs, q):
+        if not need_token(hdrs, q):
             return reply(conn, "401 Unauthorized", '{"err":"token"}')
         name = q.get("name", "")
         if not (name.endswith(".py") or name.endswith(".json")) or "/" in name:
@@ -433,49 +544,73 @@ def handle(conn):
         except Exception as e:
             return reply(conn, "500 Internal", '{"err":"%s"}' % e)
 
+    if path == "/api/reboot":
+        reset_pending = True
+        return reply(conn, "200 OK", '{"ok":1}')
+
     return reply(conn, "404 Not Found", '{"err":"404"}')
 
 
-def http_server():
-    s = socket.socket()
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        s.bind(("0.0.0.0", int(cfg_get("http_port"))))
-    except Exception as e:
-        print("bind failed", e)
-        return None
-    s.listen(4)
-    s.settimeout(0.25)
-    return s
-
-
-# ---------------------------------------------------------------- 主流程
+# ---------------------------------------------------------------- 启动
 cfg = load_json(CFG_FILE, {})
 for k, v in DEFAULT_CFG.items():
     cfg.setdefault(k, v)
-apply_cfg()
+set_gains()
+
+_id = machine.unique_id()
+uid = "dc1-%02x%02x" % (_id[-2], _id[-1])
+
+sched = store.Sched()
+cd = store.Countdown()
+energy = store.Energy()
+
+restore_state()
 
 w = wifi_sta()
 if w is None:
     ap_mode = True
     wifi_ap()
-    dns = dns_socket()
-    print("AP mode: %s / %s -> 192.168.4.1" % (cfg_get("ap_ssid"),
-                                               cfg_get("ap_pass")))
+    print("AP mode: %s / %s" % (cfg_get("ap_ssid"), cfg_get("ap_pass")))
 else:
-    dns = None
-    print("STA ok:", w.ifconfig())
+    print("STA:", w.ifconfig())
+    sntp_sync()
 
-srv = http_server()
-print("http on", cfg_get("http_port"))
+us = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+us.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+us.setblocking(False)
+try:
+    us.bind(("0.0.0.0", UDP_PORT))
+except Exception as e:
+    print("udp bind fail", e)
+    us = None
+
+srv = socket.socket()
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    srv.bind(("0.0.0.0", int(cfg_get("http_port"))))
+    srv.listen(4)
+    srv.settimeout(0.2)
+except Exception as e:
+    print("http bind fail", e)
+    srv = None
+
+print("DC1 %s id=%s ip=%s prov=%d" % (FW_VERSION, uid, ip_now(),
+                                      1 if prov_open else 0))
 gc.collect()
 
-last_ui = 0
+last = time.ticks_ms()
+last_gc = last
 while True:
     if reset_pending:
         time.sleep_ms(300)
-        import machine
         machine.reset()
+
+    now = time.ticks_ms()
+    dt = time.ticks_diff(now, last)
+    last = now
+    if prov_open and time.ticks_diff(now, boot_ms) > PROV_WINDOW_MS:
+        prov_open = False
+        print("prov window closed")
 
     if srv is not None:
         try:
@@ -492,15 +627,21 @@ while True:
         except Exception as e:
             print("http err", e)
 
-    if dns is not None:
-        dns_answer(dns)
+    if us is not None:
+        udp_serve(us)
 
     poll_keys()
     if meter:
-        meter.poll()
+        if meter.poll():
+            energy.add(meter.last.get("power", 0), dt)
     else:
-        time.sleep_ms(20)
+        time.sleep_ms(10)
 
-    if time.ticks_diff(time.ticks_ms(), last_ui) > 60000:
-        last_ui = time.ticks_ms()
+    for ch, on, rid in sched.due():
+        set_plug(ch, on)
+    for ch, on, cid in cd.tick(dt):
+        set_plug(ch, on)
+
+    if time.ticks_diff(now, last_gc) > 60000:
+        last_gc = now
         gc.collect()

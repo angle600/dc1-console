@@ -1,35 +1,109 @@
-"""DC1 控制页（极简，省 RAM）。按钮走 /api/switch，状态 2s 拉一次。"""
+"""DC1 手机控制页（无外部依赖，省 RAM）"""
 
 PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>DC1</title><style>
-body{font-family:-apple-system,"Microsoft YaHei",sans-serif;margin:0;padding:16px;background:#111;color:#eee}
-h2{font-size:18px;margin:4px 0 12px}
-.row{display:flex;justify-content:space-between;align-items:center;padding:12px;margin:8px 0;
-background:#1e1e1e;border-radius:10px}
-button{padding:10px 18px;border:0;border-radius:8px;font-size:15px;background:#444;color:#fff}
-button.on{background:#c62828}
-.mono{font-family:ui-monospace,Consolas,monospace;color:#9cdcfe}
-.small{font-size:12px;color:#888;margin-top:14px;line-height:1.6}
+*{box-sizing:border-box}body{font-family:-apple-system,"Microsoft YaHei",sans-serif;margin:0;padding:14px;background:#111;color:#eee}
+h3{font-size:15px;margin:18px 0 8px;color:#bbb}
+.row{display:flex;gap:8px;align-items:center;padding:10px 12px;margin:6px 0;background:#1e1e1e;border-radius:10px}
+.row .n{flex:1}
+button{padding:8px 14px;border:0;border-radius:8px;font-size:14px;background:#3a3a3a;color:#fff}
+button.on{background:#c62828}button.del{background:#333;color:#f88}
+input,select{background:#262626;color:#eee;border:1px solid #3a3a3a;border-radius:6px;padding:6px}
+.mono{font-family:ui-monospace,Consolas,monospace;color:#9cdcfe;font-size:13px}
+.small{font-size:12px;color:#888;margin-top:10px;line-height:1.7}
+.day{display:inline-block;padding:4px 7px;margin:2px;border-radius:6px;background:#262626;cursor:pointer;font-size:12px}
+.day.sel{background:#c62828}
 </style></head><body>
-<h2>斐讯 DC1 · MicroPython</h2>
-<div id="list"></div>
+<h2 style="font-size:17px;margin:2px 0 12px">斐讯 DC1 · MicroPython</h2>
+
+<div id="sws"></div>
 <div class="small mono" id="meter">--</div>
-<div class="small">接口：/api/state · /api/switch?ch=1&amp;on=1 · /api/file（PUT 上传代码）</div>
+
+<h3>定时</h3>
+<div id="sched"></div>
+<div class="row" style="flex-wrap:wrap">
+  <select id="sch_ch"><option value="total">总开关</option><option value="1">插孔1</option>
+  <option value="2">插孔2</option><option value="3">插孔3</option></select>
+  <select id="sch_on"><option value="1">开</option><option value="0">关</option></select>
+  <input id="sch_t" type="time" value="07:30" style="width:110px">
+  <select id="sch_mode" onchange="days()"><option value="once">单次</option><option value="week">每周</option></select>
+  <button onclick="addSched()">添加</button>
+</div>
+<div id="days" style="margin:4px 0 2px"></div>
+
+<h3>倒计时</h3>
+<div id="cds"></div>
+<div class="row">
+  <select id="cd_ch"><option value="total">总开关</option><option value="1">插孔1</option>
+  <option value="2">插孔2</option><option value="3">插孔3</option></select>
+  <select id="cd_on"><option value="0">关</option><option value="1">开</option></select>
+  <input id="cd_min" type="number" value="30" min="1" style="width:70px"> 分钟
+  <button onclick="addCd()">开始</button>
+</div>
+
+<h3>电量</h3>
+<div class="row"><span class="n">累计</span><span class="mono" id="e_total">--</span></div>
+<div class="row"><span class="n">今日</span><span class="mono" id="e_today">--</span></div>
+
+<div class="small">UDP 54321 发现/配网 · HTTP /api/state /api/switch /api/schedule /api/countdown</div>
+
 <script>
-const NAMES={total:"总开关",1:"插孔1",2:"插孔2",3:"插孔3",logo:"LOGO 灯"};
+var NAMES={total:"总开关",1:"插孔1",2:"插孔2",3:"插孔3",logo:"LOGO 灯"};
+var DAYS=["一","二","三","四","五","六","日"], sel=127;
+function h(q){return fetch(q).then(function(r){return r.json()})}
+function days(){
+  var once=document.getElementById("sch_mode").value=="once";
+  var h="";for(var i=0;i<7;i++)h+='<span class="day'+(!once&&(sel>>i&1)?' sel':'')+
+    '" onclick="tg('+i+')" style="'+(once?'opacity:.35':'')+'">周'+DAYS[i]+'</span>';
+  document.getElementById("days").innerHTML=h}
+function tg(i){sel^=1<<i;days()}
 function render(s){
-  let h="";
-  for(const k of ["total","1","2","3","logo"]){
-    h+='<div class="row"><span>'+NAMES[k]+'</span><button class="'+(s[k]?"on":"")+
-       '" onclick="sw(\\''+k+'\\','+(s[k]?0:1)+')">'+(s[k]?"ON":"OFF")+'</button></div>';
-  }
-  document.getElementById("list").innerHTML=h;
-  const m=s.meter||{};
-  document.getElementById("meter").textContent=
-    "电压 "+(m.voltage||0)+"V  电流 "+(m.current||0)+"A  功率 "+(m.power||0)+"W";
+  var h="";
+  for(var k in NAMES){h+='<div class="row"><span class="n">'+NAMES[k]+
+    '</span><button class="'+(s[k]?"on":"")+'" onclick="sw(\\''+k+'\\','+(s[k]?0:1)+')">'+
+    (s[k]?"ON":"OFF")+'</button></div>'}
+  document.getElementById("sws").innerHTML=h;
+  var m=s.meter||{};
+  document.getElementById("meter").textContent="电压 "+(m.voltage||0)+"V  电流 "+
+    (m.current||0)+"A  功率 "+(m.power||0)+"W";
+  var e=s.energy||{};
+  document.getElementById("e_total").textContent=(e.total_kwh||0)+" kWh";
+  document.getElementById("e_today").textContent=(e.today_kwh||0)+" kWh";
+  h="";
+  (s.schedList||[]).forEach(function(r){
+    h+='<div class="row"><span class="n">'+(NAMES[r.ch]||r.ch)+' '+(r.on?"开":"关")+' '+
+      ("0"+r.hh).slice(-2)+':'+("0"+r.mm).slice(-2)+' '+
+      (r.days?('每周 '+(r.days==127?'每天':'选日')):'单次')+
+      '</span><button class="del" onclick="delSched('+r.id+')">删</button></div>'});
+  document.getElementById("sched").innerHTML=h||'<div class="small">暂无</div>';
+  h="";
+  (s.cd||[]).forEach(function(c){
+    h+='<div class="row"><span class="n">'+(NAMES[c.ch]||c.ch)+' '+(c.on?"开":"关")+' '+
+      Math.ceil(c.left)+'s 后</span><button class="del" onclick="delCd('+c.id+')">删</button></div>'});
+  document.getElementById("cds").innerHTML=h||'<div class="small">暂无</div>';
 }
-function sw(ch,on){fetch("/api/switch?ch="+ch+"&on="+on).then(r=>r.json()).then(render)}
-function tick(){fetch("/api/state").then(r=>r.json()).then(render).catch(()=>{})}
-tick();setInterval(tick,2000);
+function tick(){
+  h("/api/state").then(function(s){
+    h("/api/schedule").then(function(l){s.schedList=l;render(s)})
+  }).catch(function(){})
+}
+function sw(c,on){h("/api/switch?ch="+c+"&on="+on).then(tick)}
+function addSched(){
+  var t=document.getElementById("sch_t").value.split(":");
+  var mode=document.getElementById("sch_mode").value;
+  var body={op:"add",ch:document.getElementById("sch_ch").value,
+    on:+document.getElementById("sch_on").value,hh:+t[0],mm:+t[1],
+    days:mode=="once"?0:sel};
+  fetch("/api/schedule",{method:"POST",body:JSON.stringify(body)}).then(tick)
+}
+function delSched(id){fetch("/api/schedule",{method:"POST",body:JSON.stringify({op:"del",id:id})}).then(tick)}
+function addCd(){
+  var body={op:"add",ch:document.getElementById("cd_ch").value,
+    on:+document.getElementById("cd_on").value,
+    sec:(+document.getElementById("cd_min").value)*60};
+  fetch("/api/countdown",{method:"POST",body:JSON.stringify(body)}).then(tick)
+}
+function delCd(id){fetch("/api/countdown",{method:"POST",body:JSON.stringify({op:"del",id:id})}).then(tick)}
+days();tick();setInterval(tick,3000);
 </script></body></html>"""
