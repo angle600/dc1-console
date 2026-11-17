@@ -210,6 +210,19 @@ def init_meter():
         print("cse7766 init fail:", e)
 
 
+def free_meter():
+    """OTA/读大文件前释放计量对象：1MB 版堆只有 ~5KB，不释放会 MemoryError。
+    重启后 init_meter() 会重建，不影响使用。"""
+    global meter
+    if meter is not None:
+        meter = None
+        try:
+            gc.collect()
+        except Exception:
+            pass
+        log("meter freed (ota/read)")
+
+
 def set_gains():
     m = cfg.get("meter") or {}
     if meter:
@@ -287,37 +300,75 @@ def restore_state():
 
 
 # ---------------------------------------------------------------- 按键
-key_prev = {"1": 1, "2": 1, "3": 1}
+# 按键：不假设极性。上电采基线（空闲电平），之后"与基线不同"即视为按下。
+key_idle = {"1": 1, "2": 1, "3": 1}
+key_down = {"1": False, "2": False, "3": False}
 key_t = {"1": 0, "2": 0, "3": 0}
-tot_prev = 1
+tot_idle = 1
+tot_down = False
 tot_t = 0
-DEBOUNCE = 50
+DEBOUNCE = 60
+
+
+def keys_init():
+    """采按键空闲基线：连续取 6 次，取最后一次（避开上电抖动）"""
+    global tot_idle
+    if u7 is not None:
+        for ch, bit in KEY_BIT.items():
+            for _ in range(6):
+                try:
+                    raw = u7.read_all()
+                except Exception:
+                    break
+                key_idle[ch] = (raw >> bit) & 1
+                time.sleep_ms(20)
+    if pin_total is not None:
+        for _ in range(6):
+            tot_idle = pin_total.value()
+            time.sleep_ms(20)
+    print("keys idle:", key_idle, "total:", tot_idle)
+    log("keys idle: %s total=%d" % (key_idle, tot_idle))
 
 
 def poll_keys():
-    global tot_prev, tot_t
-    if u7 is None:
-        return
-    try:
-        raw = u7.read_all()
-    except Exception:
-        return
+    """按下沿触发（按住不连发）；极性由基线决定，不写死高/低有效"""
+    global tot_down, tot_t
     now = time.ticks_ms()
-    for ch, bit in KEY_BIT.items():
-        v = (raw >> bit) & 1
-        if v != key_prev[ch]:
-            key_prev[ch] = v
-            key_t[ch] = now
-        elif v == 0 and key_t[ch] and time.ticks_diff(now, key_t[ch]) > DEBOUNCE:
-            key_t[ch] = 0
-            set_plug(ch, not state[ch])
-    v = pin_total.value()
-    if v != tot_prev:
-        tot_prev = v
-        tot_t = now
-    elif v == 1 and tot_t and time.ticks_diff(now, tot_t) > DEBOUNCE:
-        tot_t = 0
-        set_plug("total", not state["total"])
+    if u7 is not None:
+        try:
+            raw = u7.read_all()
+        except Exception:
+            raw = None
+        if raw is not None:
+            for ch, bit in KEY_BIT.items():
+                v = (raw >> bit) & 1
+                pressed = (v != key_idle[ch])
+                if pressed and not key_down[ch]:
+                    if not key_t[ch]:
+                        key_t[ch] = now
+                    elif time.ticks_diff(now, key_t[ch]) > DEBOUNCE:
+                        key_down[ch] = True
+                        key_t[ch] = 0
+                        print("KEY", ch)
+                        set_plug(ch, not state[ch])
+                elif not pressed:
+                    key_down[ch] = False
+                    key_t[ch] = 0
+
+    if pin_total is not None:
+        v = pin_total.value()
+        pressed = (v != tot_idle)
+        if pressed and not tot_down:
+            if not tot_t:
+                tot_t = now
+            elif time.ticks_diff(now, tot_t) > DEBOUNCE:
+                tot_down = True
+                tot_t = 0
+                print("KEY total")
+                set_plug("total", not state["total"])
+        elif not pressed:
+            tot_down = False
+            tot_t = 0
 
 
 # ---------------------------------------------------------------- 网络
@@ -655,9 +706,13 @@ def handle(conn):
 
     # ---- TCP 无线迭代：分片写文件 / 读回校验 ----
     if path == "/api/put" and method == "POST":
+        if not need_token(hdrs, q):
+            return reply(conn, "401 Unauthorized", '{"err":"token"}')
         try:
             name = js.get("name", "")
             off = int(js.get("off", 0))
+            if off == 0:
+                free_meter()
             raw = ubinascii.a2b_base64(js.get("b64", ""))
             if not name or "/" in name or name.startswith("."):
                 raise ValueError("bad name")
@@ -676,9 +731,16 @@ def handle(conn):
         except Exception:
             pass
         name = q.get("name", "")
+        free_meter()
+        try:
+            off = int(q.get("off", 0))
+            lim = int(q.get("len", 512))
+        except Exception:
+            off, lim = 0, 512
         try:
             with open(name, "rb") as f:
-                blob = f.read()
+                f.seek(off)
+                blob = f.read(lim)          # 分片读，避免整文件进堆（1MB 版会 OOM）
             return reply(conn, "200 OK", ubinascii.b2a_base64(blob).decode(),
                          "text/plain")
         except Exception as e:
@@ -868,6 +930,8 @@ def handle(conn):
     if path == "/api/file":
         if not need_token(hdrs, q):
             return reply(conn, "401 Unauthorized", '{"err":"token"}')
+        if not need_token(hdrs, q):
+            return reply(conn, "401 Unauthorized", '{"err":"token"}')
         name = q.get("name", "")
         if not (name.endswith(".py") or name.endswith(".json")) or "/" in name:
             return reply(conn, "400 Bad Request", '{"err":"name"}')
@@ -952,6 +1016,10 @@ log("wifi: %s" % ("AP" if ap_mode else "STA"))
 log("http bind: %s" % ("ok" if srv else "FAIL"))
 try:
     init_hw()
+    try:
+        keys_init()
+    except Exception as e:
+        print("keys_init fail", e)
     log("hw: uart=%s i2c=%s" % (uart0 is not None, u7 is not None))
 except Exception as e:
     print("init_hw fail", e)
@@ -971,12 +1039,22 @@ try:
     import gc
     gc.collect()
     print("free after init:", gc.mem_free())
+    log("free: %d" % gc.mem_free())
 except Exception:
     gc = None
 
 loop_n = 0
+last_iter = time.ticks_ms()
 while True:
     loop_n += 1
+    # 软件看门狗：单次迭代超过 8 秒 = 卡死（I2C/网络异常），重启自愈
+    _now = time.ticks_ms()
+    _stall = time.ticks_diff(_now, last_iter)
+    if _stall > 8000:
+        log_err("watchdog", "stall %d ms, rebooting" % _stall)
+        time.sleep_ms(150)
+        machine.reset()
+    last_iter = _now
     if gc and loop_n % 50 == 0:
         gc.collect()
     if reset_pending:

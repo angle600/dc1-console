@@ -19,12 +19,22 @@ import sys
 import time
 import urllib.request
 
-CHUNK = 512   # 1024 会让 1MB 版 ESP8266 撞内存上限（实测 400）
+CHUNK = 256   # 512 在「计量常开」的 1MB 版上仍会撞 MemoryError，256 更稳
+
+
+TOKEN = ""
+
+
+def _url(ip, path):
+    if not TOKEN:
+        return "http://%s%s" % (ip, path)
+    sep = "&" if "?" in path else "?"
+    return "http://%s%s%st=%s" % (ip, path, sep, TOKEN)
 
 
 def post(ip, path, payload, timeout=8):
     req = urllib.request.Request(
-        "http://%s%s" % (ip, path),
+        _url(ip, path),
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
         method="POST")
@@ -32,8 +42,27 @@ def post(ip, path, payload, timeout=8):
         return json.loads(r.read().decode())
 
 
+def get_raw(ip, path, timeout=6):
+    """裸 socket 读：urllib 在设备侧偶发 RemoteDisconnected，校验用它更稳"""
+    import socket as _s
+    c = _s.create_connection((ip, 80), timeout=timeout)
+    c.sendall(("GET %s HTTP/1.0\r\n\r\n" % path).encode())
+    c.settimeout(timeout)
+    d = b""
+    while True:
+        try:
+            ch = c.recv(2048)
+        except Exception:
+            break
+        if not ch:
+            break
+        d += ch
+    c.close()
+    return d.split(b"\r\n\r\n", 1)[-1]
+
+
 def get(ip, path, timeout=8):
-    with urllib.request.urlopen("http://%s%s" % (ip, path), timeout=timeout) as r:
+    with urllib.request.urlopen(_url(ip, path), timeout=timeout) as r:
         return r.read()
 
 
@@ -45,7 +74,10 @@ def main():
     ap.add_argument("--get")
     ap.add_argument("--out")
     ap.add_argument("--reset", action="store_true")
+    ap.add_argument("--token", help="设备 api_token（设备设了令牌后必须提供）")
     a = ap.parse_args()
+    global TOKEN
+    TOKEN = a.token or ""
 
     if a.get:
         blob = base64.b64decode(get(a.ip, "/api/get?name=%s" % a.get))
@@ -81,10 +113,25 @@ def main():
         sys.stdout.flush()
     print("\r  100.0%%  %d/%d  用时 %.1fs" % (len(blob), len(blob), time.time() - t0))
 
+    # 逐片回读比对（一次性读整文件在 1MB 版会 OOM）
     try:
-        back = base64.b64decode(get(a.ip, "/api/get?name=%s" % name))
+        back = b""
+        off = 0
+        while off < len(blob):
+            part = b""
+            for _ in range(3):
+                try:
+                    raw = get_raw(a.ip, "/api/get?name=%s&off=%d&len=192" % (name, off))
+                    part = base64.b64decode(b"".join(raw.split()))  # b2a_base64 每行带 \n
+                    break
+                except Exception:
+                    time.sleep(0.2)
+            if not part:
+                break
+            back += part
+            off += len(part)
     except Exception as e:
-        print("回读校验跳过（设备读大文件会 OOM）：%s" % e)
+        print("回读校验失败：%s" % e)
         return
     
     ok = hashlib.sha256(back).digest() == hashlib.sha256(blob).digest()

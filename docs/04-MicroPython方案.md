@@ -188,3 +188,17 @@ python tools/tcp_push.py --ip 192.168.31.243 --reset
 - **STA 连上后必须 `AP_IF.active(False)`**：ESP8266 的 AP 默认开启且无密码，否则设备旁边永远有个开放入口
 - 有线→无线的**广播会被路由器丢弃**（实测），`cli prov` 必须让电脑先连设备热点再发（走 192.168.4.1 单播）
 - 页面 `index.html` 的 JS 是从 `webui.py` 抽取的，抽取时 `\\'` 会多留一个反斜杠导致整段 JS 语法错误，抽取后必须 `node --check` 验证
+
+## 11. 装配前加固（2026-11-18）
+
+| 改动 | 说明 |
+|---|---|
+| 按键极性自适应 | `keys_init()` 采空闲基线，之后"与基线不同"= 按下；不再假设高/低有效（U7 三键 + GPIO16 总键都适用） |
+| 按键按下沿触发 | 按住不连发；`DEBOUNCE=60ms` |
+| 软件看门狗 | 主循环单次迭代 > 8 s 判定卡死 → 写 err.log → `machine.reset()` |
+| `/api/get` 分片 | `?off=&len=`，避免整文件进堆；`b2a_base64` 每行带 `\n`，校验前需 `split()` 再解码 |
+| OTA 前释放计量 | `free_meter()`：写/读文件前释放 CSE7766 对象，否则 `MemoryError`（堆仅 ~5 KB） |
+| 危险接口鉴权 | `/api/put`、`/api/file` 需 `?t=<token>`；`/api/switch` 仍开放（局域网内可用，网页免配 token） |
+| 令牌化推送 | `tools/tcp_push.py --token <api_token>`；256 B/片在计量常开时也能过 |
+
+实测：倒计时 8 s 准点执行；单次定时到点触发并自动删除；OTA 15,911 B 回读 sha256 一致。
