@@ -1,0 +1,17 @@
+{
+  "device": "Phicomm DC1 (ESP8266EX, 1MB)",
+  "mac": "dc:4f:22:04:9c:ef",
+  "firmware_strings": [
+    "PHI_CS-EHS707_V0.2.34A_240",
+    "PHI_CS-EHS707_V0.2.39B_324"
+  ],
+  "size": 1048576,
+  "sha256": "a547ffd1c890713ca2264533d78eab6a41f7c970a1d11c8ab9eaa22e45302610",
+  "read_via": "esptool 5.6.0 --no-stub @115200, 8-64KB chunks, 0x0-0x100000",
+  "verified": "4 点抽样回读逐字节一致 (0x0/0x1E000/0x54000/0xF0000)",
+  "read_at": "2026-11-18 02:40:54",
+  "copies": [
+    "backup/dc1_original_1M.bin",
+    "firmware/original/dc1_original_1M_user.bin"
+  ]
+}
