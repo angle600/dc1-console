@@ -24,6 +24,21 @@ python cli/dc1ctl.py fw update --dir firmware/micropython
 
 `fw update` 走 `PUT /api/file?name=...`，逐个覆盖 `.py`；**重启后生效**（`cli/dc1ctl.py reboot`）。
 
+## 可选：自己交叉编译内核 `.bin`
+
+本机没有 `xtensa-lx106-elf-gcc`，所以仓库**不含** `.bin`；需要自建时：
+
+```bash
+git clone -b v1.29.0 --depth 1 https://github.com/micropython/micropython
+cd micropython/ports/esp8266
+make BOARD=ESP8266_GENERIC BOARD_VARIANT=FLASH_1M -j8   # 需 xtensa-lx106-elf 工具链在 PATH
+# 产物：build-ESP8266_GENERIC-FLASH_1M/firmware.bin
+esptool.py --port COM5 write_flash --flash_size=1MB 0x0 firmware.bin
+```
+
+已在 Windows 验证的只有前半段：`py_compile` 全通过、`mpy-cross`（v1.29.0 / mpy v6.3）
+把 5 个模块编成 `.mpy`（`firmware/build/mpy/`），可用 `fw update --mpy` 上传以省 RAM。
+
 ## 运行期文件（设备根目录）
 
 ```
