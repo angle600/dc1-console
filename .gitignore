@@ -17,3 +17,6 @@ __pycache__/
 # 备份固件（体积大，本地保存不进 git）
 backup/
 *.bak
+
+# WorkBuddy 项目记忆/缓存
+.workbuddy/
