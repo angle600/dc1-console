@@ -71,11 +71,82 @@ def udp_send(payload, targets=("255.255.255.255",), timeout=2.0, want=None):
     return found
 
 
-def discover(timeout=2.5):
+def _local_prefix():
+    """取本机非 127/169.254 网段的 /24 前缀"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.168.255.255", 9))          # 不实际发包，只为拿出口 IP
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = ""
+    finally:
+        s.close()
+    if not ip or ip.startswith("127.") or ip.startswith("169.254."):
+        return None
+    return ip.rsplit(".", 1)[0]
+
+
+def scan_subnet(prefix=None, timeout=0.25, workers=16):
+    """广播被路由器挡住时的兜底：扫 /24 的 80 端口 + /api/info
+
+    有线→无线的广播在不少路由器上被丢弃，但点对点单播正常，
+    所以发现设备不能只靠 UDP 广播。
+    并发不宜过高：设备 listen backlog 只有 4，64 路并发会把它打爆（实测）。
+    """
+    import threading
+    prefix = prefix or _local_prefix()
+    if not prefix:
+        return []
+    found, lock = [], threading.Lock()
+
+    def probe(host):
+        ip = "%s.%d" % (prefix, host)
+        s = socket.socket()
+        s.settimeout(timeout)
+        try:
+            if s.connect_ex((ip, 80)) != 0:
+                return
+        except Exception:
+            return
+        finally:
+            s.close()
+        # 探针连接刚关闭时设备可能还在处理上一个连接，GET 重试一次
+        for _ in range(2):
+            try:
+                with urllib.request.urlopen("http://%s/api/info" % ip, timeout=2.5) as r:
+                    d = json.loads(r.read().decode())
+                d.setdefault("ip", ip)
+                d.setdefault("t", "dev")
+                with lock:
+                    found.append(d)
+                return
+            except Exception:
+                time.sleep(0.15)
+
+    ts = [threading.Thread(target=probe, args=(h,)) for h in range(2, 255)]
+    for i in range(0, len(ts), workers):
+        for t in ts[i:i + workers]:
+            t.start()
+        for t in ts[i:i + workers]:
+            t.join()
+    return found
+
+
+def discover(timeout=2.5, scan=True):
     targets = ["255.255.255.255", "192.168.4.1"]
     devs = udp_send({"t": "discover", "proto": PROTO}, targets, timeout)
-    devs.sort(key=lambda d: (d.get("type"), d.get("name") or ""))
-    return devs
+    if not devs and scan:
+        devs = scan_subnet()
+    # 去重（按 id）
+    seen, out = set(), []
+    for d in devs:
+        k = d.get("id") or d.get("ip")
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(d)
+    out.sort(key=lambda d: (d.get("type") or "", d.get("name") or ""))
+    return out
 
 
 def resolve(args):
