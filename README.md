@@ -296,6 +296,7 @@ sourceComponent: root.curType === "DC1" ? dc1Comp
 - [`docs/03-AI内网控制.md`](docs/03-AI内网控制.md) — ESPHome 路线的 AI 控制
 - [`docs/04-MicroPython方案.md`](docs/04-MicroPython方案.md) — 可行性与 OTA 边界
 - [`docs/05-原厂固件.md`](docs/05-原厂固件.md) — 原厂固件怎么读、镜像校验、能挖到什么
+- [`docs/06-装配与标定.md`](docs/06-装配与标定.md) — **装配前检查、装壳、计量标定、故障恢复**
 
 ## 许可
 
