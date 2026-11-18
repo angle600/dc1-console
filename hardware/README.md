@@ -73,6 +73,12 @@ AC N ─────────────────────────
 | 调试/刷机 TX | GPIO1 | O | 板载 `LOG_TX` 测试点 |
 | 调试/刷机 RX | GPIO3 | I | 板载 `RX1` 测试点（与 I2C SDA 复用，刷机时断开 U7 不影响） |
 
+> **LOG_TX 调试模式（MicroPython `debug_log_tx=true`，仓库默认）**：
+> UART0 **不 swap**，留在 GPIO1(TX)/GPIO3(RX)，`print()` 以 115200 从 `LOG_TX` 输出启动日志；
+> 代价是 CSE7766 计量暂缓、U7（I2C SDA=GPIO3）会 ENODEV 自动降级（继电器/按键不可用）。
+> 日志确认正常后，通过 `POST /api/config {"debug_log_tx":false}` 切回计量模式（此时 UART0 swap 到 GPIO13/15，LOG_TX 不再有输出）。
+> 灯行为：LOGO 灯（GPIO14）上电即常亮；WiFi 灯（GPIO0）未连/AP 时 1s 周期慢闪、连上已记录 SSID 后长亮。
+
 ### 4.2 U7（CAT9554，I2C 0x20）位映射
 
 | U7 位 | 网络 | 功能 | 固件实体 |

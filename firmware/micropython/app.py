@@ -40,6 +40,10 @@ KEY_BIT = {"1": KEY1, "2": KEY2, "3": KEY3}
 DEFAULT_CFG = {
     "ssid": "", "password": "", "ap_ssid": "DC1-Setup", "ap_pass": "dc1setup",
     "name": "DC1", "hostname": "dc1", "http_port": 80, "api_token": "",
+    # 调试阶段：UART0 留在默认 GPIO1(TX)/GPIO3(RX)，LOG_TX 以 115200 打印日志；
+    #   代价是 CSE7766 计量暂缓、U7(I2C SDA=GPIO3) 可能 ENODEV 自动降级。
+    #   日志确认正常后再置 false 恢复计量。
+    "debug_log_tx": True,
     "meter_enabled": False,          # 首次上电默认关：避免 UART0 swap 抢走 REPL
     "meter": {"v_gain": 1.0, "i_gain": 1.0, "p_gain": 1.0,
               "v1r": 1.0, "v2r": 1.0},
@@ -53,6 +57,8 @@ ap_mode = False
 prov_open = True
 reset_pending = False
 uid = "dc1-0000"
+wifi_led = None           # GPIO0 WiFi 灯：低电平亮；同时是下载脚，须启动后才配置
+WIFI_BLINK_MS = 500       # 1 秒周期慢闪 = 500ms 亮 + 500ms 灭
 
 
 # ---------------------------------------------------------------- 小工具
@@ -78,7 +84,12 @@ def read_log(name, n=1500):
 
 
 def log(msg):
-    """启动日志写文件：UART 被 swap 后串口看不到，只能靠这个排查"""
+    """启动日志：同时打到 LOG_TX(GPIO1) 串口与 boot.log 文件。
+    debug_log_tx=True 时 UART0 未 swap，print() 即从 LOG_TX 输出 115200 日志。"""
+    try:
+        print("[LOG] %s" % msg)
+    except Exception:
+        pass
     try:
         with open("boot.log", "a") as f:
             f.write("%s\n" % msg)
@@ -134,23 +145,29 @@ def sntp_sync(host="ntp.aliyun.com"):
 
 # ---------------------------------------------------------------- 硬件
 def init_hw():
-    """WiFi/HTTP 起来之后再初始化硬件：
-    UART0 必须先 swap 到 GPIO15/13，GPIO3 才能当 I2C SDA。"""
+    """WiFi/HTTP 起来之后再初始化硬件。
+    debug_log_tx=True：UART0 留在默认 GPIO1(TX)/GPIO3(RX)，LOG_TX 输出 115200 日志；
+      代价是 CSE7766 计量暂缓、U7(I2C SDA=GPIO3) 可能 ENODEV 后自动降级。"""
     global uart0, i2c, u7, logo, pin_total
     if not cfg.get("hw", True):
         print("hw skipped (config: hw=false) -> REPL 保留在 GPIO1/3")
         log("hw skipped")
         return
-    # ★ 关键：GPIO3 同时是 UART0-RX（REPL）和 U7 的 I2C-SDA。
-    #   必须先把 UART0 swap 到 GPIO15/13，GPIO3 才能当 SDA 用，否则 I2C 收不到 ACK（ENODEV）。
-    #   代价：REPL 会随 UART0 搬到 GPIO13/15，USB 口的串口就没有交互了。
-    uart0 = None
-    try:
-        uart0 = UART(0, baudrate=4800, bits=8, parity=0, stop=1, tx=15, rx=13,
-                     timeout=200)
-        print("uart0 -> GPIO15/13 (CSE7766)")
-    except Exception as e:
-        print("uart swap fail:", e)
+    # ★ GPIO3 同时是 UART0-RX 与 U7 的 I2C-SDA。
+    #   调试模式不 swap：UART0 TX 留在 GPIO1 → LOG_TX 有日志输出；
+    #   U7 可能因 GPIO3 被占而 ENODEV，属预期降级，HTTP/OTA/灯不受影响。
+    if cfg.get("debug_log_tx"):
+        uart0 = None
+        print("debug_log_tx: UART0 stays GPIO1/3, LOG_TX active")
+        log("UART0 stays GPIO1/3 (LOG_TX), meter skipped")
+    else:
+        uart0 = None
+        try:
+            uart0 = UART(0, baudrate=4800, bits=8, parity=0, stop=1, tx=15, rx=13,
+                         timeout=200)
+            print("uart0 -> GPIO15/13 (CSE7766)")
+        except Exception as e:
+            print("uart swap fail:", e)
 
     i2c = None
     u7 = None
@@ -161,9 +178,10 @@ def init_hw():
             u7.set_input(p)
         print("U7 ok id=0x20")
     except Exception as e:
-        print("U7 init fail:", e)                        # 不致命：HTTP 仍要能起来
+        print("U7 init fail (debug 模式预期降级):", e)
+        u7 = None                                        # 不致命：HTTP 仍要能起来
 
-    logo = Pin(14, Pin.OUT, value=1)                    # 低电平点亮
+    logo = Pin(14, Pin.OUT, value=0)                    # 低电平点亮 —— 上电即亮
     try:
         pin_total = Pin(16, Pin.IN, Pin.PULL_DOWN)      # ESP32/RP2 才有 PULL_DOWN
     except (AttributeError, ValueError):
@@ -198,6 +216,10 @@ def init_meter():
     """meter_enabled=True 才解析 CSE7766 帧；UART 已在上电时 swap 好。
     若此前被 /api/meter?on=0 释放过，这里重新 swap 回来。"""
     global meter, uart0
+    if cfg.get("debug_log_tx"):
+        # 调试模式绝不能 swap UART0 —— 否则 LOG_TX 立刻没输出
+        print("meter skipped (debug_log_tx: UART0 reserved for LOG_TX)")
+        return
     if not cfg.get("meter_enabled"):
         print("meter disabled (config.json: meter_enabled=true 开启)")
         return
@@ -256,6 +278,33 @@ def logo_write(on):
     if logo is not None:
         logo.value(0 if on else 1)
     state["logo"] = bool(on)
+
+
+def wifi_led_init():
+    """WiFi 灯 GPIO0（低电平亮）。必须在 main.py 的 3s REPL 窗口之后调用，
+    否则上电瞬间拉低 IO0 会把芯片带进下载模式。"""
+    global wifi_led
+    try:
+        wifi_led = Pin(0, Pin.OUT, value=1)          # 初始熄灭
+        print("WiFi LED init: GPIO0")
+    except Exception as e:
+        print("WiFi LED init fail:", e)
+
+
+def wifi_led_tick(now):
+    """AP 或未连上已记录 SSID → 1s 周期慢闪；STA 已连上 → 长亮。"""
+    if wifi_led is None:
+        return
+    linked = (not ap_mode) and (w is not None)
+    if linked:
+        try:
+            linked = bool(w.isconnected())
+        except Exception:
+            linked = False
+    if linked:
+        wifi_led.value(0)                            # 长亮（低电平点亮）
+    else:
+        wifi_led.value(0 if ((now // WIFI_BLINK_MS) & 1) == 0 else 1)
 
 
 def save_state():
@@ -909,7 +958,7 @@ def handle(conn):
         for k, v in js.items():
             if k in ("ssid", "password", "name", "ap_ssid", "ap_pass",
                      "api_token", "http_port", "hostname", "meter_enabled",
-                     "hw"):
+                     "debug_log_tx", "hw"):
                 cfg[k] = v
             elif k == "meter":
                 cfg["meter"] = v
@@ -929,6 +978,8 @@ def handle(conn):
 
 
 # ---------------------------------------------------------------- 启动
+print("=== DC1 boot begin (LOG_TX=GPIO1, 115200) ===")
+
 cfg = load_json(CFG_FILE, {})
 for k, v in DEFAULT_CFG.items():
     cfg.setdefault(k, v)
@@ -941,6 +992,14 @@ try:
     open("boot.log", "w").close()
 except Exception:
     pass
+
+# WiFi 灯 GPIO0：main.py 的 3s 下载窗口已过，配置为输出不影响烧录
+wifi_led_init()
+
+print("=== DC1 boot FW=%s id=%s free=%d debug=%s ===" % (
+    FW_VERSION, uid, gc.mem_free(), cfg.get("debug_log_tx")))
+log("boot start FW=%s id=%s free=%d debug=%s" % (
+    FW_VERSION, uid, gc.mem_free(), cfg.get("debug_log_tx")))
 
 sched = store.Sched()
 cd = store.Countdown()
@@ -1051,6 +1110,7 @@ while True:
         machine.reset()
 
     now = time.ticks_ms()
+    wifi_led_tick(now)                 # WiFi 灯：未连慢闪 1s / 已连长亮
     dt = time.ticks_diff(now, last)
     last = now
     if prov_open and time.ticks_diff(now, boot_ms) > PROV_WINDOW_MS:

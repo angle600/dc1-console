@@ -4,6 +4,14 @@ import sys
 import time
 import machine
 
+# 上电即点亮 LOGO 灯（GPIO14 低电平亮），越早越好。
+# GPIO14 不是下载脚，此操作不影响串口烧录。
+try:
+    from machine import Pin
+    Pin(14, Pin.OUT, value=0)
+except Exception:
+    pass
+
 time.sleep(3)                      # 3 秒窗口：可 Ctrl-C 打断
 
 if "safe.flag" in os.listdir():
