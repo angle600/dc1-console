@@ -19,7 +19,7 @@ import sys
 import time
 import urllib.request
 
-CHUNK = 256   # 512 在「计量常开」的 1MB 版上仍会撞 MemoryError，256 更稳
+CHUNK = 128   # 实测阈值：160 可过、192 断连；128 留余量
 
 
 TOKEN = ""
@@ -30,6 +30,32 @@ def _url(ip, path):
         return "http://%s%s" % (ip, path)
     sep = "&" if "?" in path else "?"
     return "http://%s%s%st=%s" % (ip, path, sep, TOKEN)
+
+
+def post_raw(ip, path, payload, timeout=8):
+    """裸 socket POST：urllib 的请求头多 200 B，1MB 版会直接撞内存上限"""
+    import socket as _s
+    body = json.dumps(payload).encode()
+    c = _s.create_connection((ip, 80), timeout=timeout)
+    q = _url(ip, path).split(ip, 1)[1]
+    c.sendall(("POST %s HTTP/1.0\r\nContent-Length: %d\r\n\r\n"
+               % (q, len(body))).encode() + body)
+    c.settimeout(timeout)
+    d = b""
+    while True:
+        try:
+            ch = c.recv(1024)
+        except Exception:
+            break
+        if not ch:
+            break
+        d += ch
+    c.close()
+    body = d.split(b"\r\n\r\n", 1)[-1]
+    try:
+        return json.loads(body.decode())
+    except Exception:
+        return {"ok": 0, "err": body[:80].decode("utf-8", "replace")}
 
 
 def post(ip, path, payload, timeout=8):
@@ -58,7 +84,11 @@ def get_raw(ip, path, timeout=6):
             break
         d += ch
     c.close()
-    return d.split(b"\r\n\r\n", 1)[-1]
+    body = d.split(b"\r\n\r\n", 1)[-1]
+    try:
+        return json.loads(body.decode())
+    except Exception:
+        return {"ok": 0, "err": body[:80].decode("utf-8", "replace")}
 
 
 def get(ip, path, timeout=8):
@@ -75,6 +105,8 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--reset", action="store_true")
     ap.add_argument("--token", help="设备 api_token（设备设了令牌后必须提供）")
+    ap.add_argument("--skip-verify", action="store_true",
+                    help="跳过回读校验直接提交（内存极低时用，风险自负）")
     a = ap.parse_args()
     global TOKEN
     TOKEN = a.token or ""
@@ -104,7 +136,7 @@ def main():
     t0 = time.time()
     while off < len(blob):
         piece = blob[off:off + CHUNK]
-        r = post(a.ip, "/api/put", {"name": name, "off": off,
+        r = post_raw(a.ip, "/api/put", {"name": name, "off": off,
                                     "b64": base64.b64encode(piece).decode()})
         if not r.get("ok"):
             sys.exit("失败于 offset %d: %s" % (off, r))
@@ -113,30 +145,19 @@ def main():
         sys.stdout.flush()
     print("\r  100.0%%  %d/%d  用时 %.1fs" % (len(blob), len(blob), time.time() - t0))
 
-    # 逐片回读比对（一次性读整文件在 1MB 版会 OOM）
-    try:
-        back = b""
-        off = 0
-        while off < len(blob):
-            part = b""
-            for _ in range(3):
-                try:
-                    raw = get_raw(a.ip, "/api/get?name=%s&off=%d&len=192" % (name, off))
-                    part = base64.b64decode(b"".join(raw.split()))  # b2a_base64 每行带 \n
-                    break
-                except Exception:
-                    time.sleep(0.2)
-            if not part:
-                break
-            back += part
-            off += len(part)
-    except Exception as e:
-        print("回读校验失败：%s" % e)
+    if a.skip_verify:
+        r = post_raw(a.ip, "/api/put", {"name": name, "done": 1})
+        print("已提交(跳过校验): %s" % r)
         return
-    
-    ok = hashlib.sha256(back).digest() == hashlib.sha256(blob).digest()
-    print("回读校验: %s (%d B)" % ("一致 ✓" if ok else "不一致 ✗", len(back)))
-    if not ok:
+
+    # 设备端 sha256 校验后提交（低内存下回读必失败，故不再回读）
+    sha = hashlib.sha256(blob).hexdigest()
+    time.sleep(1.0)
+    r = post_raw(a.ip, "/api/put", {"name": name, "done": 1, "sha": sha})
+    if r.get("ok") and "committed" in r:
+        print("校验通过并已提交 ✓ sha256=%s… size=%s" % (sha[:12], r.get("committed")))
+    else:
+        print("提交失败：%s" % r)
         sys.exit(3)
 
 

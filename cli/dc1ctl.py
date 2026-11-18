@@ -166,26 +166,40 @@ def resolve(args):
 
 # ------------------------------------------------------------------ HTTP
 def http(host, path, method="GET", body=None, token="", timeout=8):
-    url = "http://%s%s" % (host, path)
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, method=method)
+    """最小请求头的裸 socket HTTP。
+
+    设备（1MB ESP8266）空闲堆只有 ~3KB，urllib 自带的一堆默认头会让
+    /api/switch 这类需要构造完整状态 JSON 的请求直接 MemoryError（实测必现）。
+    """
+    data = json.dumps(body).encode() if body is not None else b""
+    qs = path
     if token:
-        req.add_header("X-Token", token)
+        qs += ("&" if "?" in path else "?") + "t=" + token
+    # 注意：固件当前对"多于一个请求头"的请求会直接断连（待修），
+    # 所以 GET 一律只发请求行；POST 仅带必需的 Content-Length。
+    lines = ["%s %s HTTP/1.0" % (method, qs)]
     if data:
-        req.add_header("Content-Type", "application/json")
+        lines.append("Content-Type: application/json")
+        lines.append("Content-Length: %d" % len(data))
+    req = ("\r\n".join(lines) + "\r\n\r\n").encode() + data
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read()
-            return json.loads(raw.decode() or "{}")
-    except urllib.error.HTTPError as e:
-        try:
-            return json.loads(e.read().decode())
-        except Exception:
-            return {"err": "HTTP %s" % e.code}
+        s = socket.create_connection((host, 80), timeout=timeout)
+        s.sendall(req)
+        s.settimeout(timeout)
+        buf = b""
+        while True:
+            ch = s.recv(2048)
+            if not ch:
+                break
+            buf += ch
+        s.close()
     except Exception as e:
         return {"err": "%s" % e}
+    _, _, payload = buf.partition(b"\r\n\r\n")
+    try:
+        return json.loads(payload.decode() or "{}")
+    except Exception:
+        return {"err": "bad json: %s" % payload[:60].decode("utf-8", "replace")}
 
 
 def get_json(host, path, token="", timeout=8):

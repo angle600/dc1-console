@@ -9,9 +9,11 @@
 """
 
 import gc
+import os
 import json
 import select
 import ubinascii
+import uhashlib
 import socket
 import time
 import sys
@@ -193,14 +195,20 @@ meter = None
 
 
 def init_meter():
-    """meter_enabled=True 才解析 CSE7766 帧；UART 已在上电时 swap 好。"""
-    global meter
+    """meter_enabled=True 才解析 CSE7766 帧；UART 已在上电时 swap 好。
+    若此前被 /api/meter?on=0 释放过，这里重新 swap 回来。"""
+    global meter, uart0
     if not cfg.get("meter_enabled"):
         print("meter disabled (config.json: meter_enabled=true 开启)")
         return
     if uart0 is None:
-        print("meter: uart not available")
-        return
+        try:
+            uart0 = UART(0, baudrate=4800, bits=8, parity=0, stop=1,
+                         tx=15, rx=13, timeout=200)
+            print("uart0 re-swap ok")
+        except Exception as e:
+            print("meter: uart re-swap fail", e)
+            return
     # 注：GPIO16 悬空时会误判为"按住"，故不再用它决定是否跳过计量
     try:
         meter = CSE7766(uart0, v1r=float((cfg.get("meter") or {}).get("v1r", 1.0)),
@@ -210,9 +218,14 @@ def init_meter():
         print("cse7766 init fail:", e)
 
 
+req_n = 0          # 已处理 HTTP 请求数
+h_max = 0          # 单次请求最大耗时 ms
+h_last_ms = 0      # 最后一次请求完成的 ticks_ms
+
+
 def free_meter():
-    """OTA/读大文件前释放计量对象：1MB 版堆只有 ~5KB，不释放会 MemoryError。
-    重启后 init_meter() 会重建，不影响使用。"""
+    """OTA/读大文件前释放 CSE7766 对象。
+    注意：**不要 deinit UART0** —— 那是控制台，实测会让设备失去串口且状态异常。"""
     global meter
     if meter is not None:
         meter = None
@@ -220,7 +233,7 @@ def free_meter():
             gc.collect()
         except Exception:
             pass
-        log("meter freed (ota/read)")
+        log("meter freed (ota)")
 
 
 def set_gains():
@@ -442,7 +455,6 @@ def udp_serve(sock):
         data, addr = sock.recvfrom(2048)
     except Exception:
         return
-    print("HANDLE len=%d %r" % (len(data), data[:40]))
     if not data:
         return
     try:
@@ -574,23 +586,35 @@ def serve_file(conn, name, ctype):
 
 
 def state_json():
-    d = {k: bool(v) for k, v in state.items()}
-    d["meter"] = meter.state() if meter else {"voltage": 0, "current": 0,
-                                              "power": 0}
-    d["energy"] = energy.state()
-    d["cd"] = cd.all()
-    d["sched"] = len(sched.all())
-    d["type"] = TYPE
-    d["fw"] = FW_VERSION
-    d["ip"] = ip_now()
-    d["ap"] = 1 if ap_mode else 0
-    d["prov"] = 1 if prov_open else 0
-    d["time"] = int(time.time())
+    """直接拼字符串，避免 "建 dict + json.dumps" 的两轮大分配。
+    1MB 版堆只有 2-3 KB，这两步经常直接 MemoryError（表现为连接被静默关闭）。"""
+    m = meter.state() if meter else None
+    if m:
+        ms = ('{"voltage":%s,"current":%s,"power":%s,"calibrated":%d,'
+              '"flags":%d,"uk":%d,"ut":%d,"ik":%d,"it":%d,"pk":%d,"pt":%d,'
+              '"energy_pulses":%d}'
+              % (m.get("voltage", 0), m.get("current", 0), m.get("power", 0),
+                 m.get("calibrated", 0), m.get("flags", 0), m.get("uk", 0),
+                 m.get("ut", 0), m.get("ik", 0), m.get("it", 0),
+                 m.get("pk", 0), m.get("pt", 0), m.get("energy_pulses", 0)))
+    else:
+        ms = '{"voltage":0,"current":0,"power":0}'
+    e = energy.state()
     try:
-        d["rssi"] = w.status("rssi") if w else 0
+        rssi = w.status("rssi") if w else 0
     except Exception:
-        d["rssi"] = 0
-    return json.dumps(d)
+        rssi = 0
+    return ('{"total":%d,"1":%d,"2":%d,"3":%d,"logo":%d,"meter":%s,'
+            '"energy":{"total_kwh":%s,"today_kwh":%s},"cd":%s,"sched":%d,'
+            '"type":"%s","fw":"%s","ip":"%s","ap":%d,"prov":%d,"time":%d,'
+            '"rssi":%d}'
+            % (1 if state["total"] else 0, 1 if state["1"] else 0,
+               1 if state["2"] else 0, 1 if state["3"] else 0,
+               1 if state["logo"] else 0, ms,
+               e.get("total_kwh", 0), e.get("today_kwh", 0),
+               json.dumps(cd.all()), len(sched.all()), TYPE, FW_VERSION,
+               ip_now(), 1 if ap_mode else 0, 1 if prov_open else 0,
+               int(time.time()), rssi))
 
 
 def need_token(hdrs, q):
@@ -631,7 +655,6 @@ def handle(conn):
         if not chunk:
             break
         data += chunk
-    print("HANDLE len=%d %r" % (len(data), data[:40]))
     if not data:
         return
     # MicroPython 的 bytes 没有 partition()，用 find 切片
@@ -676,6 +699,10 @@ def handle(conn):
             need -= len(chunk)
 
     path, q = parse_qs(target)
+    try:
+        gc.collect()          # 路由前回收：碎片的堆最容易在构造大响应时失败
+    except Exception:
+        pass
     js = {}
     if body:
         try:
@@ -692,36 +719,62 @@ def handle(conn):
         return reply(conn, "200 OK", json.dumps(info_obj()))
     if path == "/api/state":
         return reply(conn, "200 OK", state_json())
-    if path == "/api/cal" and method == "GET":
-        last = meter.state() if meter else {}
-        return reply(conn, "200 OK", json.dumps({
-            "meter": cfg.get("meter") or {},
-            "measured": {"voltage": last.get("voltage", 0),
-                         "current": last.get("current", 0),
-                         "power": last.get("power", 0)},
-            "raw": {k: last.get(k, 0) for k in ("uk", "ut", "ik", "it", "pk", "pt")},
-            "calibrated": last.get("calibrated", 0),
-            "flags": last.get("flags", 0),
-        }))
-
-    # ---- TCP 无线迭代：分片写文件 / 读回校验 ----
     if path == "/api/put" and method == "POST":
         if not need_token(hdrs, q):
             return reply(conn, "401 Unauthorized", '{"err":"token"}')
         try:
             name = js.get("name", "")
             off = int(js.get("off", 0))
-            if off == 0:
-                free_meter()
-            raw = ubinascii.a2b_base64(js.get("b64", ""))
             if not name or "/" in name or name.startswith("."):
                 raise ValueError("bad name")
-            mode = "r+b" if off else "wb"
-            with open(name, mode) as f:
-                f.seek(off)
-                f.write(raw)
+            # 原子写入：先写 <name>.new，客户端确认全部发完后才改名替换。
+            # 这样中途断电/失败不会把旧固件截断（今天两次变砖都是这个原因）。
+            tmp = name + ".new"
+            if js.get("done"):
+                # 提交请求只做改名，绝不再碰内容（off=0 会截断文件 —— 曾把 app.mpy 截成 0 B）
+                pass
+            else:
+                if off == 0:
+                    free_meter()
+                raw = ubinascii.a2b_base64(js.get("b64", ""))
+                mode = "r+b" if off else "wb"
+                with open(tmp, mode) as f:
+                    f.seek(off)
+                    f.write(raw)
+            nxt = off + (0 if js.get("done") else len(raw))
+            if js.get("done"):
+                # 设备端 sha256 校验后再提交：不依赖客户端回读（低内存下回读必失败）
+                try:
+                    sz = os.stat(tmp)[6]
+                except Exception as e:
+                    raise ValueError("tmp missing: %s" % e)
+                if sz == 0:
+                    raise ValueError("empty tmp")
+                want = js.get("sha") or ""
+                if want:
+                    h = uhashlib.sha256()
+                    with open(tmp, "rb") as f:
+                        while True:
+                            blk = f.read(256)
+                            if not blk:
+                                break
+                            h.update(blk)
+                    got = ubinascii.hexlify(h.digest()).decode()
+                    if got != want:
+                        raise ValueError("sha mismatch")
+                try:                      # 保留一份旧固件用于回滚
+                    os.remove(name + ".bak")
+                except Exception:
+                    pass
+                try:
+                    os.rename(name, name + ".bak")
+                except Exception:
+                    pass
+                os.rename(tmp, name)
+                return reply(conn, "200 OK", json.dumps(
+                    {"ok": 1, "name": name, "committed": sz}))
             return reply(conn, "200 OK", json.dumps(
-                {"ok": 1, "name": name, "off": off + len(raw)}))
+                {"ok": 1, "name": name, "off": nxt}))
         except Exception as e:
             return reply(conn, "400 Bad Request", json.dumps({"ok": 0, "err": str(e)}))
 
@@ -759,35 +812,23 @@ def handle(conn):
     if path == "/api/energy":
         return reply(conn, "200 OK", json.dumps(energy.state()))
     if path == "/api/meter":
+        want = q.get("on", "")
+        if want in ("0", "1"):
+            if not need_token(hdrs, q):
+                return reply(conn, "401 Unauthorized", '{"err":"token"}')
+            if want == "1":
+                cfg["meter_enabled"] = True     # 先置位，否则 init_meter 直接返回
+                if meter is None:
+                    init_meter()
+                cfg["meter_enabled"] = (meter is not None)
+            else:
+                free_meter()
+                cfg["meter_enabled"] = False
+            save_json(CFG_FILE, cfg)
+            return reply(conn, "200 OK", json.dumps({
+                "ok": 1, "meter": meter is not None,
+                "free": gc.mem_free()}))
         return reply(conn, "200 OK", json.dumps(meter.state() if meter else {}))
-
-    if path == "/api/sys":
-        try:
-            up = time.ticks_diff(time.ticks_ms(), boot_ms) / 1000.0
-        except Exception:
-            up = 0
-        try:
-            rc = machine.reset_cause()
-        except Exception:
-            rc = -1
-        return reply(conn, "200 OK", json.dumps({
-            "up": round(up, 1), "free": gc.mem_free(),
-            "min_free": min_free, "loop": loop_n, "reset": rc,
-            "rssi": (w.status("rssi") if w else 0),
-        }))
-
-    if path == "/api/keys":
-        raw = -1
-        if u7 is not None:
-            try:
-                raw = u7.read_all()
-            except Exception as e:
-                raw = -2
-        return reply(conn, "200 OK", json.dumps({
-            "raw": raw,
-            "total_pin": pin_total.value() if pin_total is not None else -1,
-            "u7": u7 is not None,
-        }))
 
     if path == "/api/switch":
         ch = q.get("ch", "total")
@@ -853,72 +894,6 @@ def handle(conn):
         return reply(conn, "400 Bad Request", '{"err":"bad epoch"}')
 
     # 单点标定：把"电表读数"换算成系数（gain_new = 真实值 * 周期 / 系数）
-    if path == "/api/cal":
-        if not need_token(hdrs, q):
-            return reply(conn, "401 Unauthorized", '{"err":"token"}')
-        m = cfg.get("meter") or {}
-        if js.get("reset") or q.get("reset"):
-            m.update({"v_gain": 1.0, "i_gain": 1.0, "p_gain": 1.0,
-                      "v1r": 1.0, "v2r": 1.0})
-            cfg["meter"] = m
-            save_json(CFG_FILE, cfg)
-            set_gains()
-            return reply(conn, "200 OK", json.dumps({"ok": 1, "meter": m}))
-        if meter is None:
-            return reply(conn, "503 Unavailable",
-                         '{"err":"meter_off","hint":"安全模式下未初始化 CSE7766"}')
-        last = meter.state()
-        changed = {}
-        # 硬件常量：V1R=采样锰铜电阻(mΩ)，V2R=分压电阻(MΩ)。
-        # 求出它们等价于"用回原厂标定"（芯片内的 Uk/Ik/Pk 已随帧下发）
-        if js.get("v1r") or q.get("v1r"):
-            v1r = float(js.get("v1r") or q.get("v1r"))
-            if v1r <= 0:
-                return reply(conn, "400 Bad Request", '{"err":"bad v1r"}')
-            m["v1r"] = round(v1r, 6)
-            changed["v1r"] = m["v1r"]
-        if js.get("v2r") or q.get("v2r"):
-            v2r = float(js.get("v2r") or q.get("v2r"))
-            if v2r <= 0:
-                return reply(conn, "400 Bad Request", '{"err":"bad v2r"}')
-            m["v2r"] = round(v2r, 6)
-            changed["v2r"] = m["v2r"]
-        try:
-            if js.get("voltage") or q.get("voltage"):
-                true_v = float(js.get("voltage") or q.get("voltage"))
-                ut, uk = last.get("ut", 0), last.get("uk", 0)
-                if not (ut and uk):
-                    raise ValueError("no_frame")
-                m["v_gain"] = round(true_v * ut / uk, 6)
-                changed["v_gain"] = m["v_gain"]
-            if js.get("current") or q.get("current"):
-                true_i = float(js.get("current") or q.get("current"))
-                it, ik = last.get("it", 0), last.get("ik", 0)
-                if not (it and ik):
-                    raise ValueError("no_frame")
-                m["i_gain"] = round(true_i * it / ik, 6)
-                changed["i_gain"] = m["i_gain"]
-            if js.get("power") or q.get("power"):
-                true_p = float(js.get("power") or q.get("power"))
-                pt, pk = last.get("pt", 0), last.get("pk", 0)
-                if not (pt and pk):
-                    raise ValueError("no_frame")
-                m["p_gain"] = round(true_p * pt / pk, 6)
-                changed["p_gain"] = m["p_gain"]
-        except Exception as e:
-            return reply(conn, "400 Bad Request", '{"err":"%s"}' % e)
-        if not changed:
-            return reply(conn, "400 Bad Request",
-                         '{"err":"need voltage/current/power/v1r/v2r"}')
-        cfg["meter"] = m
-        save_json(CFG_FILE, cfg)
-        set_gains()
-        return reply(conn, "200 OK", json.dumps(
-            {"ok": 1, "changed": changed, "gains": m,
-             "measured": {"voltage": last.get("voltage"),
-                          "current": last.get("current"),
-                          "power": last.get("power")}}))
-
     if path == "/api/config":
         if not need_token(hdrs, q):
             return reply(conn, "401 Unauthorized", '{"err":"token"}')
@@ -943,21 +918,6 @@ def handle(conn):
         if js.get("reboot"):
             reset_pending = True
         return reply(conn, "200 OK", '{"ok":1}')
-
-    if path == "/api/file":
-        if not need_token(hdrs, q):
-            return reply(conn, "401 Unauthorized", '{"err":"token"}')
-        if not need_token(hdrs, q):
-            return reply(conn, "401 Unauthorized", '{"err":"token"}')
-        name = q.get("name", "")
-        if not (name.endswith(".py") or name.endswith(".json")) or "/" in name:
-            return reply(conn, "400 Bad Request", '{"err":"name"}')
-        try:
-            with open(name, "wb") as f:
-                f.write(body)
-            return reply(conn, "200 OK", '{"ok":1,"bytes":%d}' % len(body))
-        except Exception as e:
-            return reply(conn, "500 Internal", '{"err":"%s"}' % e)
 
     if path == "/api/reboot":
         if not need_token(hdrs, q):
@@ -1110,7 +1070,13 @@ while True:
         if conn is not None:
             print("ACCEPT")
             try:
+                _t0 = time.ticks_ms()
                 handle(conn)
+                _dt = time.ticks_diff(time.ticks_ms(), _t0)
+                req_n += 1
+                h_last_ms = time.ticks_ms()
+                if _dt > h_max:
+                    h_max = _dt
             except Exception as e:
                 log_err("handle", e)
             finally:

@@ -20,6 +20,19 @@ else:
         try:
             with open("err.txt", "w") as f:
                 sys.print_exception(e, f)
+        except Exception:
+            pass
+        # 一级回滚：升级前的备份还在，直接还原（不占用 safe 窗口）
+        try:
+            if "app.bak" in os.listdir():
+                os.remove("app.mpy")
+                os.rename("app.bak", "app.mpy")
+                print("APP FAIL -> 回滚 app.bak 并重启")
+                time.sleep(0.5)
+                machine.reset()
+        except Exception as ee:
+            print("rollback err", ee)
+        try:
             with open("safe.flag", "w") as f:
                 f.write("1")
         except Exception:
