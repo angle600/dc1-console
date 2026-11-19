@@ -3,7 +3,7 @@
   "password": "your-wifi-password",
   "name": "客厅排插",
   "ap_ssid": "DC1-Setup",
-  "ap_pass": "dc1setup",
+  "ap_pass": "",
   "hostname": "dc1",
   "http_port": 80,
   "api_token": "change-me-token",

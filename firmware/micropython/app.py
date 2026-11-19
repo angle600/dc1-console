@@ -26,7 +26,7 @@ from cat9554 import CAT9554, KEY1, KEY2, KEY3, RELAY0, RELAY1, RELAY2, RELAY3
 from cse7766 import CSE7766
 import store
 
-FW_VERSION = "1.2.2"
+FW_VERSION = "1.2.4"
 TYPE = "DC1"
 UDP_PORT = 54321
 PROV_WINDOW_MS = 30000
@@ -38,7 +38,7 @@ RELAY_BIT = {"1": RELAY1, "2": RELAY2, "3": RELAY3, "total": RELAY0}
 KEY_BIT = {"1": KEY1, "2": KEY2, "3": KEY3}
 
 DEFAULT_CFG = {
-    "ssid": "", "password": "", "ap_ssid": "DC1-Setup", "ap_pass": "dc1setup",
+    "ssid": "", "password": "", "ap_ssid": "DC1-Setup", "ap_pass": "",
     "name": "DC1", "hostname": "dc1", "http_port": 80, "api_token": "",
     # 正常运行：UART0 swap 到 GPIO15/13 给 CSE7766，恢复电量计量。
     # 日志改走 UART1(GPIO2, TX-only)；GPIO2 板上未引出时用 HTTP /api/log 读 boot.log。
@@ -505,12 +505,14 @@ def wifi_ap():
         a.config(essid=cfg_get("ap_ssid"))
     except Exception as e:
         pass
+    # 配网 AP 固定开放：主人要求免密码，手机/电脑一连即用。
+    # 先清密码再设 OPEN，避免残留 WPA 配置导致仍要输入密码。
     try:
-        a.config(password=cfg_get("ap_pass"))
-    except Exception as e:
+        a.config(password="")
+    except Exception:
         pass
     try:
-        a.config(authmode=3)
+        a.config(authmode=0)               # 0 = OPEN（1=WEP、3=WPA2，勿写错）
     except Exception:
         pass
     try:
