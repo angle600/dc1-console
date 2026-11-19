@@ -26,7 +26,7 @@ from cat9554 import CAT9554, KEY1, KEY2, KEY3, RELAY0, RELAY1, RELAY2, RELAY3
 from cse7766 import CSE7766
 import store
 
-FW_VERSION = "1.2.6"
+FW_VERSION = "1.2.7"
 TYPE = "DC1"
 UDP_PORT = 54321
 PROV_WINDOW_MS = 30000
@@ -171,6 +171,14 @@ def init_hw():
         uart0 = None
         pass
         log("UART0 stays GPIO1/3 (LOG_TX), meter skipped")
+    elif not cfg.get("meter_enabled"):
+        # ★ v1.2.7 方案B：计量硬件禁用（CSE7766 疑似损坏，RX1 永久不接回）。
+        #   此时完全不创建 UART0，GPIO13(RX1)/GPIO15 都不被固件占用，
+        #   避免 GPIO13 被配成输入后受外部异常灌流影响。
+        #   要恢复计量：POST /api/config {"meter_enabled":true} 后重启，
+        #   或 GET /api/meter?on=1 即时启用（init_meter 会重建 UART0）。功能代码完整保留。
+        uart0 = None
+        log("meter disabled: UART0/GPIO13 not claimed")
     else:
         uart0 = None
         try:
