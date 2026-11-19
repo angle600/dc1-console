@@ -26,7 +26,7 @@ from cat9554 import CAT9554, KEY1, KEY2, KEY3, RELAY0, RELAY1, RELAY2, RELAY3
 from cse7766 import CSE7766
 import store
 
-FW_VERSION = "1.2.7"
+FW_VERSION = "1.2.9"
 TYPE = "DC1"
 UDP_PORT = 54321
 PROV_WINDOW_MS = 30000
@@ -288,8 +288,22 @@ def set_gains():
 
 
 def relay_write(ch, on):
+    """写一路继电器。
+    ★ v1.2.8：CAT9554 上电/掉电复位后 CFG 回 0xFF（全输入），此时 write_pin 写输出
+    寄存器**不报错但引脚是输入**，继电器完全不动作（表现为「API 成功却没咔哒声」）。
+    因此每次写前校验方向寄存器，异常则重配后再写。"""
     if u7 is not None:
-        u7.write_pin(RELAY_BIT[ch], 1 if on else 0)
+        try:
+            if not u7.is_configured():
+                u7.reinit()
+                log("u7 reinit: cfg restored")
+            u7.write_pin(RELAY_BIT[ch], 1 if on else 0)
+        except Exception:
+            try:
+                u7.reinit()
+                u7.write_pin(RELAY_BIT[ch], 1 if on else 0)
+            except Exception:
+                pass
     relay_state[ch] = bool(on)
 
 
@@ -378,6 +392,9 @@ def restore_state():
     else:
         relay_write("total", False)
         state["total"] = False
+    # ★ v1.2.9：总继电器吸合瞬间电流冲击会让 5V 短暂跌落，紧接着写分路会 ENODEV/
+    #   写不进去（实测 out 缺位、日志却显示成功）。这里等电源稳住，且每路之间留间隔。
+    time.sleep_ms(150)
     for k in ("1", "2", "3"):
         if s.get(k, True):
             relay_write(k, True)
@@ -385,9 +402,16 @@ def restore_state():
         else:
             relay_write(k, False)
             state[k] = False
+        time.sleep_ms(50)
     logo_write(bool(s.get("logo", True)))
-    log("relay: total=%s 1=%s 2=%s 3=%s" % (
-        state["total"], state["1"], state["2"], state["3"]))
+    # 回读实际寄存器，确认真的写进去了（不再只信内存字典）
+    real = -1
+    try:
+        real = u7._rd(0x01) if u7 is not None else -1
+    except Exception:
+        pass
+    log("relay: total=%s 1=%s 2=%s 3=%s out=0x%02X" % (
+        state["total"], state["1"], state["2"], state["3"], real & 0xFF))
 
 
 # ---------------------------------------------------------------- 按键
@@ -890,6 +914,19 @@ def handle(conn):
                      % (TYPE, FW_VERSION))
     if path == "/api/info":
         return reply(conn, "200 OK", json.dumps(info_obj()))
+    if path == "/api/hw":
+        # 硬件诊断：U7 方向/输出/输入寄存器 + 是否已复位（cfg 应为 0x0F）
+        d = {"uart0": uart0 is not None, "i2c": i2c is not None,
+             "u7": u7 is not None, "meter": meter is not None}
+        if u7 is not None:
+            try:
+                d["cfg"] = u7._rd(0x03)
+                d["out"] = u7._rd(0x01)
+                d["in"] = u7._rd(0x00)
+                d["cfg_ok"] = (d["cfg"] == 0x0F)
+            except Exception as e:
+                d["err"] = repr(e)
+        return reply(conn, "200 OK", json.dumps(d))
     if path == "/api/state":
         return reply(conn, "200 OK", state_json())
     if path == "/api/put" and method == "POST":
@@ -1263,6 +1300,15 @@ while True:
         time.sleep_ms(150)
         machine.reset()
     last_iter = _now
+    # ★ v1.2.8 自愈：U7 因 5V 跌落复位后 CFG 会回 0xFF（全输入），继电器从此不动。
+    #   每 100 轮（≈5s）校验一次方向寄存器，异常立即重配。
+    if u7 is not None and loop_n % 100 == 0:
+        try:
+            if not u7.is_configured():
+                u7.reinit()
+                log("u7 reinit: cfg restored (watch)")
+        except Exception:
+            pass
     if gc and loop_n % 50 == 0:
         gc.collect()
         _f = gc.mem_free()
