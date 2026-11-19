@@ -126,13 +126,13 @@ function saveWifi(){
   var pass=document.getElementById("w_pass").value;
   var msg=document.getElementById("w_msg");
   if(!ssid){msg.textContent="请填写 SSID";return}
-  msg.textContent="保存中…";
+  msg.textContent="正在连接，约 12 秒…";
   fetch("/api/config?t="+encodeURIComponent(tok()),{method:"POST",
-    body:JSON.stringify({ssid:ssid,password:pass,reboot:1})})
+    body:JSON.stringify({ssid:ssid,password:pass,try_connect:1})})
    .then(function(r){return r.json()})
-   .then(function(j){msg.textContent=j.ok?"已保存，设备重启中…（约 10 秒后重连）":
-     ("失败："+(j.err||"检查令牌"))})
-   .catch(function(){msg.textContent="已提交，设备正在重启…"});
+   .then(function(j){msg.textContent=j.ok?("已连上 "+(j.ip||"")+"，凭据已保存，切到 STA…"):
+     "连接失败，原 WiFi 未改，请检查名称/密码"})
+   .catch(function(){msg.textContent="已提交。若连上成功设备会重启，失败请刷新重试"});
 }
 document.getElementById("w_tok").value=tok();
 days();tick();setInterval(tick,3000);

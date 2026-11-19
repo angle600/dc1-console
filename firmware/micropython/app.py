@@ -26,7 +26,7 @@ from cat9554 import CAT9554, KEY1, KEY2, KEY3, RELAY0, RELAY1, RELAY2, RELAY3
 from cse7766 import CSE7766
 import store
 
-FW_VERSION = "1.1.0"
+FW_VERSION = "1.1.1"
 TYPE = "DC1"
 UDP_PORT = 54321
 PROV_WINDOW_MS = 30000
@@ -56,6 +56,7 @@ w = None
 ap_mode = False
 prov_open = True
 reset_pending = False
+wd_ignore_until = 0        # 配网连接期间跳过 8s 看门狗
 uid = "dc1-0000"
 wifi_led = None           # GPIO0 WiFi 灯：低电平亮；同时是下载脚，须启动后才配置
 WIFI_BLINK_MS = 500       # 1 秒周期慢闪 = 500ms 亮 + 500ms 灭
@@ -434,6 +435,39 @@ def poll_keys():
 
 
 # ---------------------------------------------------------------- 网络
+def key1_held():
+    """开机检测 KEY1 是否按住。CAT9554 上拉，按下为 0。
+    不能用空闲基线：开机时键已按住，基线会被采成按下态。"""
+    global i2c, u7
+    try:
+        Pin(14, Pin.OUT, value=0)          # 确保 LOGO 已亮再采样
+    except Exception:
+        pass
+    if u7 is None:
+        try:
+            i2c = I2C(scl=Pin(12), sda=Pin(3), freq=20000)
+            u7 = CAT9554(i2c, 0x20)
+            for p in (KEY1, KEY2, KEY3):
+                u7.set_input(p)
+        except Exception as e:
+            print("key1 probe fail", e)
+            log("key1 probe fail: %s" % e)
+            return False
+    lows = 0
+    for _ in range(8):
+        try:
+            v = (u7.read_all() >> KEY1) & 1
+        except Exception as e:
+            log("key1 read fail: %s" % e)
+            return False
+        if v == 0:
+            lows += 1
+        time.sleep_ms(30)
+    print("KEY1 lows %d/8" % lows)
+    log("KEY1 lows %d/8" % lows)
+    return lows >= 6
+
+
 def wifi_sta():
     s = network.WLAN(network.STA_IF)
     s.active(True)
@@ -477,6 +511,54 @@ def wifi_ap():
         print("ap ip err", e)
     print("AP:", a.config("essid"), a.ifconfig()[0])
     return a
+
+
+def _sta_wait(s, timeout_ms):
+    t0 = time.ticks_ms()
+    while not s.isconnected():
+        if time.ticks_diff(time.ticks_ms(), t0) > timeout_ms:
+            return False
+        time.sleep_ms(200)
+    return True
+
+
+def sta_try(ssid, password, timeout_ms=12000):
+    """切 STA 连接。成功返回 (True, ip)；失败恢复旧 SSID，返回 (False, "")。
+    不关 AP，失败时网页仍可从 192.168.4.1 重试。"""
+    global w, wd_ignore_until
+    wd_ignore_until = time.ticks_add(time.ticks_ms(), timeout_ms * 2 + 8000)
+    old_ssid = cfg.get("ssid") or ""
+    old_pass = cfg.get("password") or ""
+    s = network.WLAN(network.STA_IF)
+    s.active(True)
+    try:
+        s.disconnect()
+    except Exception:
+        pass
+    time.sleep_ms(200)
+    try:
+        s.connect(ssid, password or "")
+    except Exception as e:
+        print("sta connect err", e)
+        return False, ""
+    if not _sta_wait(s, timeout_ms):
+        try:
+            s.disconnect()
+        except Exception:
+            pass
+        if old_ssid:
+            try:
+                s.connect(old_ssid, old_pass)
+                _sta_wait(s, timeout_ms)
+            except Exception:
+                pass
+        return False, ""
+    w = s
+    try:
+        ip = s.ifconfig()[0]
+    except Exception:
+        ip = ""
+    return True, ip
 
 
 def ip_now():
@@ -603,9 +685,8 @@ def reply(conn, code, body, ctype="application/json; charset=utf-8"):
             "Cache-Control: no-store\r\n\r\n" % (code, ctype, len(body)))
     try:
         n = conn.send(head.encode() + body)
-        print("SENT", n)
     except Exception as e:
-        print("SEND ERR", e)
+        log_err("send", e)
 
 
 def serve_file(conn, name, ctype):
@@ -944,7 +1025,8 @@ def handle(conn):
 
     # 单点标定：把"电表读数"换算成系数（gain_new = 真实值 * 周期 / 系数）
     if path == "/api/config":
-        if not need_token(hdrs, q):
+        # AP 配网页不带 token（热点密码已是门槛）；STA 仍要 token
+        if (not ap_mode) and (not need_token(hdrs, q)):
             return reply(conn, "401 Unauthorized", '{"err":"token"}')
         if method == "GET":
             return reply(conn, "200 OK", json.dumps(
@@ -955,6 +1037,22 @@ def handle(conn):
             save_json(CFG_FILE, cfg)
             reset_pending = True
             return reply(conn, "200 OK", '{"ok":1,"reboot":1}')
+        # 配网：先连上再保存。失败不改 config.json，网页可重试。
+        if js.get("ssid") and js.get("try_connect", ap_mode):
+            ssid = js.get("ssid")
+            password = js.get("password") or ""
+            ok, ip = sta_try(ssid, password)
+            if not ok:
+                return reply(conn, "200 OK",
+                             '{"ok":0,"err":"connect_fail"}')
+            cfg["ssid"] = ssid
+            cfg["password"] = password
+            save_json(CFG_FILE, cfg)
+            log("prov saved ssid=%s ip=%s" % (ssid, ip))
+            print("prov saved", ssid, ip)
+            reset_pending = True
+            return reply(conn, "200 OK",
+                         '{"ok":1,"ip":"%s","saved":1}' % ip)
         for k, v in js.items():
             if k in ("ssid", "password", "name", "ap_ssid", "ap_pass",
                      "api_token", "http_port", "hostname", "meter_enabled",
@@ -1010,7 +1108,17 @@ try:
 except Exception as e:
     print("restore_state fail:", e)
 
-w = wifi_sta()
+# LOGO 已亮后再采 KEY1。按住开机 → 强制 AP，不连已记录的 SSID。
+force_ap = False
+try:
+    force_ap = key1_held()
+except Exception as e:
+    print("key1_held fail", e)
+    log("key1_held fail: %s" % e)
+log("force_ap: %s" % force_ap)
+print("force_ap", force_ap)
+
+w = None if force_ap else wifi_sta()
 if w is None:
     ap_mode = True
     wifi_ap()
@@ -1095,7 +1203,7 @@ while True:
     # 软件看门狗：单次迭代超过 8 秒 = 卡死（I2C/网络异常），重启自愈
     _now = time.ticks_ms()
     _stall = time.ticks_diff(_now, last_iter)
-    if _stall > 8000:
+    if _stall > 8000 and time.ticks_diff(wd_ignore_until, _now) <= 0:
         log_err("watchdog", "stall %d ms, rebooting" % _stall)
         time.sleep_ms(150)
         machine.reset()
@@ -1128,7 +1236,6 @@ while True:
             print("accept err", e)
             conn = None
         if conn is not None:
-            print("ACCEPT")
             try:
                 _t0 = time.ticks_ms()
                 handle(conn)
