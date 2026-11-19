@@ -4,11 +4,14 @@ import sys
 import time
 import machine
 
-# 上电即点亮 LOGO 灯（GPIO14 低电平亮），越早越好。
-# GPIO14 不是下载脚，此操作不影响串口烧录。
+# 开机 LOGO/ZERO 灯自检：上电先灭 0.5s，再点亮，然后才执行正常程序。
+# GPIO14 低电平点亮 / 高电平熄灭；GPIO14 不是下载脚，不影响串口烧录。
 try:
     from machine import Pin
-    Pin(14, Pin.OUT, value=0)
+    _logo = Pin(14, Pin.OUT, value=1)   # 高电平 = 灭
+    time.sleep_ms(500)                  # 灭 0.5 秒
+    _logo.value(0)                      # 低电平 = 亮
+    del _logo
 except Exception:
     pass
 
