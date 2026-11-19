@@ -212,7 +212,7 @@ POST /api/config {"wifi_reset":1}      → {"ok":1,"reboot":1}
 GET  http://192.168.4.1/               → 7709 B，含「WiFi 设置」表单
 POST http://192.168.4.1/api/config     → {"ok":1}（带 reboot:1）
    ↓ 设备重启
-重新连上 zheng31                        → 192.168.31.243，rssi -56
+重新连上 &lt;你的SSID&gt;                    → 192.168.31.243，rssi -56
 AP 自动关闭                             → 扫描不到 DC1-Setup / MicroPython-xxxx
 ```
 
