@@ -67,7 +67,7 @@ AC N ─────────────────────────
 | I2C SCL → U7 | GPIO12 | O | 需限速 **20kHz**（U7 为简配 CAT9554，非 400kHz 正品） |
 | U7 INT | GPIO4 | I | 下降沿中断，按键唤醒读 IO |
 | CSE7766 RXD | GPIO13 | I | 4800bps / 8E1，模组单向发送 |
-| 总按键 | GPIO16 | I | `INPUT_PULLDOWN_16`，按下为高（yaml 里 invert） |
+| 总按键 | GPIO16 | I | **实测空闲=高、按下=拉低（低有效）**；ESP8266 无 `PULLDOWN_16`，勿写死高有效 |
 | 板载 WiFi 灯 | GPIO0 | O | 低电平亮；同时是**下载模式拉低脚** |
 | LOGO 灯 | GPIO14 | O | 经 RELAYLED，低电平点亮（yaml `inverted: true`） |
 | 调试/刷机 TX | GPIO1 | O | 板载 `LOG_TX` 测试点 |

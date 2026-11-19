@@ -5,7 +5,7 @@
   * 上电 **30 秒内**接受 UDP 配网：{"t":"prov","ssid":..,"pass":..}
   * HTTP JSON API：开关 / 定时（单次或周一~周日重复）/ 倒计时 / 电量
   * PUT /api/file：WiFi 覆盖源码（MicroPython 无整片 OTA 的替代）
-  * 救援模式：上电按住总键(GPIO16) → 跳过 CSE7766 的 UART swap，串口 REPL 保留
+  * 配网模式：上电按住总键(GPIO16) → 强制 AP（DC1-Setup / 192.168.4.1）配网
 """
 
 import gc
@@ -26,7 +26,7 @@ from cat9554 import CAT9554, KEY1, KEY2, KEY3, RELAY0, RELAY1, RELAY2, RELAY3
 from cse7766 import CSE7766
 import store
 
-FW_VERSION = "1.2.0"
+FW_VERSION = "1.2.2"
 TYPE = "DC1"
 UDP_PORT = 54321
 PROV_WINDOW_MS = 30000
@@ -431,9 +431,11 @@ def poll_keys():
 
 # ---------------------------------------------------------------- 网络
 def key1_held():
-    """开机检测 KEY1 是否按住。CAT9554 上拉，按下为 0。
-    不能用空闲基线：开机时键已按住，基线会被采成按下态。"""
-    global i2c, u7
+    """开机检测 KEY1 是否按住。
+    板上两个 KEY1：丝印 KEY1 = 总键 GPIO16（实测空闲为高，按下拉低）；
+    U7 P0/P1/P2 = 插孔键（上拉，按下为低）。两路都是低有效，任一成立即强制 AP。
+    采样原值写 boot.log，现场可直接判极性。"""
+    global i2c, u7, pin_total
     try:
         Pin(14, Pin.OUT, value=0)          # 确保 LOGO 已亮再采样
     except Exception:
@@ -445,22 +447,33 @@ def key1_held():
             for p in (KEY1, KEY2, KEY3):
                 u7.set_input(p)
         except Exception as e:
-            pass
             log("key1 probe fail: %s" % e)
-            return False
-    lows = 0
-    for _ in range(8):
+            u7 = None
+    if pin_total is None:
         try:
-            v = (u7.read_all() >> KEY1) & 1
+            pin_total = Pin(16, Pin.IN)    # 开机早于 init_hw，这里自建总键脚
         except Exception as e:
-            log("key1 read fail: %s" % e)
-            return False
-        if v == 0:
-            lows += 1
+            log("gpio16 init fail: %s" % e)
+    lo16 = 0
+    low7 = 0
+    for _ in range(8):
+        if pin_total is not None:
+            try:
+                if pin_total.value() == 0:
+                    lo16 += 1
+            except Exception:
+                pass
+        if u7 is not None:
+            try:
+                raw = u7.read_all()
+                if ((raw >> KEY1) & 1) == 0 or ((raw >> KEY2) & 1) == 0 \
+                        or ((raw >> KEY3) & 1) == 0:
+                    low7 += 1
+            except Exception:
+                pass
         time.sleep_ms(30)
-    pass
-    log("KEY1 lows %d/8" % lows)
-    return lows >= 6
+    log("KEY16 low %d/8 U7 low %d/8" % (lo16, low7))
+    return lo16 >= 6 or low7 >= 6
 
 
 def wifi_sta():
