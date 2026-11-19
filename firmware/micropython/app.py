@@ -26,7 +26,7 @@ from cat9554 import CAT9554, KEY1, KEY2, KEY3, RELAY0, RELAY1, RELAY2, RELAY3
 from cse7766 import CSE7766
 import store
 
-FW_VERSION = "1.2.4"
+FW_VERSION = "1.2.5"
 TYPE = "DC1"
 UDP_PORT = 54321
 PROV_WINDOW_MS = 30000
@@ -49,7 +49,7 @@ DEFAULT_CFG = {
 }
 
 boot_ms = time.ticks_ms()
-state = {"total": False, "1": False, "2": False, "3": False, "logo": False}
+state = {"total": True, "1": True, "2": True, "3": True, "logo": True}
 shadow = {"1": False, "2": False, "3": False}
 w = None
 ap_mode = False
@@ -345,16 +345,26 @@ def set_plug(ch, on):
 
 
 def restore_state():
+    """恢复继电器状态。**必须在 init_hw() 之后调用**——那时 U7/logo 才初始化好，
+    relay_write 才会真正写继电器（早期版本在 init_hw 前调用，只改了内存字典，插孔实际没通电）。
+    state.json 缺失或字段缺失时按“开”处理（上电默认全开）。"""
     s = load_json(STATE_FILE, None) or {}
-    if s.get("total"):
+    if s.get("total", True):
         relay_write("total", True)
         state["total"] = True
+    else:
+        relay_write("total", False)
+        state["total"] = False
     for k in ("1", "2", "3"):
-        if s.get(k):
+        if s.get(k, True):
             relay_write(k, True)
             state[k] = True
-    if s.get("logo"):
-        logo_write(True)
+        else:
+            relay_write(k, False)
+            state[k] = False
+    logo_write(bool(s.get("logo", True)))
+    log("relay: total=%s 1=%s 2=%s 3=%s" % (
+        state["total"], state["1"], state["2"], state["3"]))
 
 
 # ---------------------------------------------------------------- 按键
@@ -1111,10 +1121,8 @@ sched = store.Sched()
 cd = store.Countdown()
 energy = store.Energy()
 
-try:
-    restore_state()
-except Exception as e:
-    pass
+# 注意：restore_state 已移到 init_hw() 之后调用——U7 未初始化时 relay_write 只改内存字典，
+# 继电器不会真正吸合。见下方硬件初始化之后。
 
 # LOGO 已亮后再采 KEY1。按住开机 → 强制 AP，不连已记录的 SSID。
 force_ap = False
@@ -1180,6 +1188,11 @@ try:
         keys_init()
     except Exception as e:
         pass
+    # ★ U7 就绪后才恢复继电器：默认全开、且真正写入 CAT9554 输出寄存器。
+    try:
+        restore_state()
+    except Exception as e:
+        log_err("restore_state", str(e))
     log("hw: uart=%s i2c=%s" % (uart0 is not None, u7 is not None))
 except Exception as e:
     pass
