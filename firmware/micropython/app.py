@@ -26,7 +26,7 @@ from cat9554 import CAT9554, KEY1, KEY2, KEY3, RELAY0, RELAY1, RELAY2, RELAY3
 from cse7766 import CSE7766
 import store
 
-FW_VERSION = "1.1.1"
+FW_VERSION = "1.2.0"
 TYPE = "DC1"
 UDP_PORT = 54321
 PROV_WINDOW_MS = 30000
@@ -40,11 +40,10 @@ KEY_BIT = {"1": KEY1, "2": KEY2, "3": KEY3}
 DEFAULT_CFG = {
     "ssid": "", "password": "", "ap_ssid": "DC1-Setup", "ap_pass": "dc1setup",
     "name": "DC1", "hostname": "dc1", "http_port": 80, "api_token": "",
-    # 调试阶段：UART0 留在默认 GPIO1(TX)/GPIO3(RX)，LOG_TX 以 115200 打印日志；
-    #   代价是 CSE7766 计量暂缓、U7(I2C SDA=GPIO3) 可能 ENODEV 自动降级。
-    #   日志确认正常后再置 false 恢复计量。
-    "debug_log_tx": True,
-    "meter_enabled": False,          # 首次上电默认关：避免 UART0 swap 抢走 REPL
+    # 正常运行：UART0 swap 到 GPIO15/13 给 CSE7766，恢复电量计量。
+    # 日志改走 UART1(GPIO2, TX-only)；GPIO2 板上未引出时用 HTTP /api/log 读 boot.log。
+    "debug_log_tx": False,
+    "meter_enabled": True,           # 恢复电量计量
     "meter": {"v_gain": 1.0, "i_gain": 1.0, "p_gain": 1.0,
               "v1r": 1.0, "v2r": 1.0},
 }
@@ -85,12 +84,8 @@ def read_log(name, n=1500):
 
 
 def log(msg):
-    """启动日志：同时打到 LOG_TX(GPIO1) 串口与 boot.log 文件。
-    debug_log_tx=True 时 UART0 未 swap，print() 即从 LOG_TX 输出 115200 日志。"""
-    try:
-        print("[LOG] %s" % msg)
-    except Exception:
-        pass
+    """日志写 boot.log，用 HTTP GET /api/log 读取。
+    计量模式 UART0 swap 给 CSE7766，TX/RX 运行期不输出；烧录走 UART0 下载模式不受影响。"""
     try:
         with open("boot.log", "a") as f:
             f.write("%s\n" % msg)
@@ -151,7 +146,7 @@ def init_hw():
       代价是 CSE7766 计量暂缓、U7(I2C SDA=GPIO3) 可能 ENODEV 后自动降级。"""
     global uart0, i2c, u7, logo, pin_total
     if not cfg.get("hw", True):
-        print("hw skipped (config: hw=false) -> REPL 保留在 GPIO1/3")
+        pass
         log("hw skipped")
         return
     # ★ GPIO3 同时是 UART0-RX 与 U7 的 I2C-SDA。
@@ -159,16 +154,16 @@ def init_hw():
     #   U7 可能因 GPIO3 被占而 ENODEV，属预期降级，HTTP/OTA/灯不受影响。
     if cfg.get("debug_log_tx"):
         uart0 = None
-        print("debug_log_tx: UART0 stays GPIO1/3, LOG_TX active")
+        pass
         log("UART0 stays GPIO1/3 (LOG_TX), meter skipped")
     else:
         uart0 = None
         try:
             uart0 = UART(0, baudrate=4800, bits=8, parity=0, stop=1, tx=15, rx=13,
                          timeout=200)
-            print("uart0 -> GPIO15/13 (CSE7766)")
+            pass
         except Exception as e:
-            print("uart swap fail:", e)
+            pass
 
     i2c = None
     u7 = None
@@ -177,9 +172,9 @@ def init_hw():
         u7 = CAT9554(i2c, 0x20)
         for p in (KEY1, KEY2, KEY3):
             u7.set_input(p)
-        print("U7 ok id=0x20")
+        pass
     except Exception as e:
-        print("U7 init fail (debug 模式预期降级):", e)
+        pass
         u7 = None                                        # 不致命：HTTP 仍要能起来
 
     logo = Pin(14, Pin.OUT, value=0)                    # 低电平点亮 —— 上电即亮
@@ -219,26 +214,26 @@ def init_meter():
     global meter, uart0
     if cfg.get("debug_log_tx"):
         # 调试模式绝不能 swap UART0 —— 否则 LOG_TX 立刻没输出
-        print("meter skipped (debug_log_tx: UART0 reserved for LOG_TX)")
+        pass
         return
     if not cfg.get("meter_enabled"):
-        print("meter disabled (config.json: meter_enabled=true 开启)")
+        pass
         return
     if uart0 is None:
         try:
             uart0 = UART(0, baudrate=4800, bits=8, parity=0, stop=1,
                          tx=15, rx=13, timeout=200)
-            print("uart0 re-swap ok")
+            pass
         except Exception as e:
-            print("meter: uart re-swap fail", e)
+            pass
             return
     # 注：GPIO16 悬空时会误判为"按住"，故不再用它决定是否跳过计量
     try:
         meter = CSE7766(uart0, v1r=float((cfg.get("meter") or {}).get("v1r", 1.0)),
                         v2r=float((cfg.get("meter") or {}).get("v2r", 1.0)))
-        print("meter ready")
+        pass
     except Exception as e:
-        print("cse7766 init fail:", e)
+        pass
 
 
 req_n = 0          # 已处理 HTTP 请求数
@@ -287,9 +282,9 @@ def wifi_led_init():
     global wifi_led
     try:
         wifi_led = Pin(0, Pin.OUT, value=1)          # 初始熄灭
-        print("WiFi LED init: GPIO0")
+        pass
     except Exception as e:
-        print("WiFi LED init fail:", e)
+        pass
 
 
 def wifi_led_tick(now):
@@ -389,7 +384,7 @@ def keys_init():
         for _ in range(6):
             tot_idle = pin_total.value()
             time.sleep_ms(20)
-    print("keys idle:", key_idle, "total:", tot_idle)
+    pass
     log("keys idle: %s total=%d" % (key_idle, tot_idle))
 
 
@@ -412,7 +407,7 @@ def poll_keys():
                     elif time.ticks_diff(now, key_t[ch]) > DEBOUNCE:
                         key_down[ch] = True
                         key_t[ch] = 0
-                        print("KEY", ch)
+                        pass
                         set_plug(ch, not state[ch])
                 elif not pressed:
                     key_down[ch] = False
@@ -427,7 +422,7 @@ def poll_keys():
             elif time.ticks_diff(now, tot_t) > DEBOUNCE:
                 tot_down = True
                 tot_t = 0
-                print("KEY total")
+                pass
                 set_plug("total", not state["total"])
         elif not pressed:
             tot_down = False
@@ -450,7 +445,7 @@ def key1_held():
             for p in (KEY1, KEY2, KEY3):
                 u7.set_input(p)
         except Exception as e:
-            print("key1 probe fail", e)
+            pass
             log("key1 probe fail: %s" % e)
             return False
     lows = 0
@@ -463,7 +458,7 @@ def key1_held():
         if v == 0:
             lows += 1
         time.sleep_ms(30)
-    print("KEY1 lows %d/8" % lows)
+    pass
     log("KEY1 lows %d/8" % lows)
     return lows >= 6
 
@@ -496,11 +491,11 @@ def wifi_ap():
     try:
         a.config(essid=cfg_get("ap_ssid"))
     except Exception as e:
-        print("ap essid err", e)
+        pass
     try:
         a.config(password=cfg_get("ap_pass"))
     except Exception as e:
-        print("ap pass err", e)
+        pass
     try:
         a.config(authmode=3)
     except Exception:
@@ -508,8 +503,8 @@ def wifi_ap():
     try:
         a.ifconfig(("192.168.4.1", "255.255.255.0", "192.168.4.1", "192.168.4.1"))
     except Exception as e:
-        print("ap ip err", e)
-    print("AP:", a.config("essid"), a.ifconfig()[0])
+        pass
+    pass
     return a
 
 
@@ -539,7 +534,7 @@ def sta_try(ssid, password, timeout_ms=12000):
     try:
         s.connect(ssid, password or "")
     except Exception as e:
-        print("sta connect err", e)
+        pass
         return False, ""
     if not _sta_wait(s, timeout_ms):
         try:
@@ -1049,7 +1044,7 @@ def handle(conn):
             cfg["password"] = password
             save_json(CFG_FILE, cfg)
             log("prov saved ssid=%s ip=%s" % (ssid, ip))
-            print("prov saved", ssid, ip)
+            pass
             reset_pending = True
             return reply(conn, "200 OK",
                          '{"ok":1,"ip":"%s","saved":1}' % ip)
@@ -1076,7 +1071,7 @@ def handle(conn):
 
 
 # ---------------------------------------------------------------- 启动
-print("=== DC1 boot begin (LOG_TX=GPIO1, 115200) ===")
+pass
 
 cfg = load_json(CFG_FILE, {})
 for k, v in DEFAULT_CFG.items():
@@ -1094,8 +1089,6 @@ except Exception:
 # WiFi 灯 GPIO0：main.py 的 3s 下载窗口已过，配置为输出不影响烧录
 wifi_led_init()
 
-print("=== DC1 boot FW=%s id=%s free=%d debug=%s ===" % (
-    FW_VERSION, uid, gc.mem_free(), cfg.get("debug_log_tx")))
 log("boot start FW=%s id=%s free=%d debug=%s" % (
     FW_VERSION, uid, gc.mem_free(), cfg.get("debug_log_tx")))
 
@@ -1106,31 +1099,31 @@ energy = store.Energy()
 try:
     restore_state()
 except Exception as e:
-    print("restore_state fail:", e)
+    pass
 
 # LOGO 已亮后再采 KEY1。按住开机 → 强制 AP，不连已记录的 SSID。
 force_ap = False
 try:
     force_ap = key1_held()
 except Exception as e:
-    print("key1_held fail", e)
+    pass
     log("key1_held fail: %s" % e)
 log("force_ap: %s" % force_ap)
-print("force_ap", force_ap)
+pass
 
 w = None if force_ap else wifi_sta()
 if w is None:
     ap_mode = True
     wifi_ap()
-    print("AP mode: %s / %s" % (cfg_get("ap_ssid"), cfg_get("ap_pass")))
+    pass
 else:
-    print("STA:", w.ifconfig())
+    pass
     # STA 已连上，关掉 ESP8266 默认开启的开放热点（否则旁边谁都能连）
     try:
         network.WLAN(network.AP_IF).active(False)
-        print("AP disabled (STA connected)")
+        pass
     except Exception as e:
-        print("ap disable fail", e)
+        pass
 
 us = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 us.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1138,7 +1131,7 @@ us.setblocking(False)
 try:
     us.bind(("0.0.0.0", UDP_PORT))
 except Exception as e:
-    print("udp bind fail", e)
+    pass
     us = None
 
 srv_poll = None
@@ -1150,7 +1143,7 @@ try:
     srv_poll = select.poll()
     srv_poll.register(srv, select.POLLIN)
 except Exception as e:
-    print("http bind fail", e)
+    pass
     srv = None
 
 try:
@@ -1171,18 +1164,18 @@ try:
     try:
         keys_init()
     except Exception as e:
-        print("keys_init fail", e)
+        pass
     log("hw: uart=%s i2c=%s" % (uart0 is not None, u7 is not None))
 except Exception as e:
-    print("init_hw fail", e)
+    pass
     log("init_hw fail: %s" % e)
 try:
     init_meter()
     log("meter: %s" % (meter is not None))
 except Exception as e:
     log("init_meter fail: %s" % e)
-print("DC1 %s id=%s ip=%s prov=%d" % (FW_VERSION, uid, ip_now(),
-                                      1 if prov_open else 0))
+log("DC1 %s id=%s ip=%s prov=%d" % (FW_VERSION, uid, ip_now(),
+                                   1 if prov_open else 0))
 gc.collect()
 
 last = time.ticks_ms()
@@ -1190,7 +1183,7 @@ last_gc = last
 try:
     import gc
     gc.collect()
-    print("free after init:", gc.mem_free())
+    pass
     log("free: %d" % gc.mem_free())
 except Exception:
     gc = None
@@ -1223,7 +1216,7 @@ while True:
     last = now
     if prov_open and time.ticks_diff(now, boot_ms) > PROV_WINDOW_MS:
         prov_open = False
-        print("prov window closed")
+        pass
 
     if srv is not None and srv_poll is not None:
         conn = None
@@ -1233,7 +1226,7 @@ while True:
         except OSError:
             conn = None
         except Exception as e:
-            print("accept err", e)
+            pass
             conn = None
         if conn is not None:
             try:
@@ -1259,7 +1252,7 @@ while True:
     try:
         poll_keys()
     except Exception as e:
-        print("keys err", e)
+        pass
     if meter:
         if meter.poll():
             energy.add(meter.last.get("power", 0), dt)
@@ -1272,7 +1265,7 @@ while True:
         for ch, on, cid in cd.tick(dt):
             set_plug(ch, on)
     except Exception as e:
-        print("timer err", e)
+        pass
 
     if time.ticks_diff(now, last_gc) > 60000:
         last_gc = now
