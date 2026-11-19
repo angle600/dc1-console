@@ -44,18 +44,24 @@ AC N ─────────────────────────
 - 芯海 CSM64F02，**与乐鑫 ESP-WROOM-02 引脚/内核一致**（ESP8266EX + 1MB Flash，
   板上丝印 `2AGM5CSM64F02`），因此可直接烧 ESP8266 固件。
 - 板载 PCB 天线（ANT1 处），金属外壳内，实测信号一般，**别把排插塞进铁盒**。
-- 正面标注的模组引脚（从上到下）：
+- 正面标注的模组引脚（**逐脚对齐 ESP-WROOM-02 datasheet**，左侧 pin1~9 / 右侧 pin18~10）：
 
-| 左侧标注 | 含义 | 右侧标注 | 含义 |
+| 左侧标注 | GPIO / 真实身份 | 右侧标注 | GPIO / 真实身份 |
 |---|---|---|---|
-| 3.3V | 模组供电 | GND | 地 |
-| RELAYLED | LOGO 灯负极（GPIO14） | KEY1 | 主电源按键（总键） |
-| SCL | I2C 时钟（GPIO12） | ADC1 | 保留/测试（`ADTEST`） |
-| RX1 | 调试串口收（GPIO3 复用） | 空 | — |
-| 空 | — | ZERO | 过零检测（未使用） |
-| LOG_TX | 日志输出（GPIO1） | 空 | — |
-| IO0 (WiFi_LED 负极) | GPIO0，板载 WiFi 灯/进下载模式 | GND | 地 |
-| GND | 地 | TX / RX | **刷机串口 TX/RX** |
+| 3.3V | pin1 = 3V3 供电 | GND | pin18 = 地 |
+| 空 | pin2 = EN（使能） | KEY1 | pin17 = GPIO16 主电源按键（低有效） |
+| RELAYLED | pin3 = GPIO14，LOGO 灯负极 | ADC1 | pin16 = TOUT（`ADTEST`，检测 VDD3P3） |
+| SCL | pin4 = GPIO12，I²C 时钟 | 空 | pin15 = RST |
+| **RX1** | pin5 = **GPIO13 = CSE7766 计量数据输入** | ZERO | pin14 = GPIO5 过零检测（未用） |
+| 空 | pin6 = GPIO15（UART0 swap TX） | GND | pin13 = 地 |
+| **LOG_TX** | pin7 = **GPIO2 = UART1 TXD（独立日志口）** | TX | pin12 = GPIO1 = UART0 TXD（刷机） |
+| IO0 (WiFi_LED 负极) | pin8 = GPIO0，WiFi 灯/下载拉低脚 | RX | pin11 = GPIO3 = UART0 RXD（刷机，兼 I²C SDA） |
+| GND | pin9 = 地 | NT | pin10 = GPIO4 = U7 中断 |
+
+> ⚠️ **重要更正（2026-11-20 实测）**：旧版把 `RX1` 误标为 GPIO3、`LOG_TX` 误标为 GPIO1。
+> 真相是 **RX1=GPIO13（计量线）**、**LOG_TX=GPIO2（UART1 日志口）**、右侧 RX 才是 GPIO3。
+> 运行时 GPIO3 是 U7 的 I²C SDA——**刷机线烧完必须拔掉，否则 TTL 顶住 I²C 导致反复重启**。
+
 
 ## 4. 引脚映射表（固件唯一真相，对照 `firmware/dc1-ai.yaml`）
 
@@ -70,16 +76,22 @@ AC N ─────────────────────────
 | 总按键 | GPIO16 | I | **实测空闲=高、按下=拉低（低有效）**；ESP8266 无 `PULLDOWN_16`，勿写死高有效 |
 | 板载 WiFi 灯 | GPIO0 | O | 低电平亮；同时是**下载模式拉低脚** |
 | LOGO 灯 | GPIO14 | O | 经 RELAYLED，低电平点亮（yaml `inverted: true`） |
-| 调试/刷机 TX | GPIO1 | O | 板载 `LOG_TX` 测试点 |
-| 调试/刷机 RX | GPIO3 | I | 板载 `RX1` 测试点（与 I2C SDA 复用，刷机时断开 U7 不影响） |
+| 调试/刷机 TX | GPIO1 | O | 模组右侧 `TX` 测试点（下载模式 UART0 TXD） |
+| 调试/刷机 RX | GPIO3 | I | 模组右侧 `RX` 测试点（UART0 RXD，运行时是 I²C SDA，**烧完必拔**） |
+| **日志 TX** | **GPIO2** | O | 模组左侧 `LOG_TX` 测试点（**UART1 TXD，独立日志口**） |
+| 计量 RX | GPIO13 | I | 模组左侧 `RX1` 测试点（CSE7766 数据输入，勿接外部线） |
 
-> **LOG_TX 调试模式（MicroPython `debug_log_tx=true`，仓库默认）**：
-> UART0 **不 swap**，留在 GPIO1(TX)/GPIO3(RX)，`print()` 以 115200 从 `LOG_TX` 输出启动日志；
-> 代价是 CSE7766 计量暂缓、U7（I2C SDA=GPIO3）会 ENODEV 自动降级（继电器/按键不可用）。
-> 日志确认正常后，通过 `POST /api/config {"debug_log_tx":false}` 切回计量模式（此时 UART0 swap 到 GPIO13/15，LOG_TX 不再有输出）。
-> 灯行为：LOGO 灯（GPIO14）上电即常亮；WiFi 灯（GPIO0）未连/AP 时 1s 周期慢闪、连上已记录 SSID 后长亮。
+> **日志方案（v1.2.6 起，最终版）**：
+> `log()` / `log_err()` 同时输出到 `boot.log`（HTTP `GET /api/log` 读）和 **UART1(GPIO2 / LOG_TX, 115200)**。
+> UART1 只发不收、独立于 UART0——**计量(CSE7766@GPIO13/15)、刷机(UART0@GPIO1/3)、I²C(U7@GPIO3/12)、日志(UART1@GPIO2) 四者零冲突**。
+> 现场打 LOG：只接 `LOG_TX → TTL 的 RX` 一根线，TTL 的 TX 悬空（GPIO2 是启动 strap，勿被拉低）。
+> 灯行为：LOGO 灯（GPIO14）上电先灭 0.5s 再常亮；WiFi 灯（GPIO0）未连/AP 时 1s 周期慢闪、连上已记录 SSID 后长亮。
 
-### 4.2 U7（CAT9554，I2C 0x20）位映射
+### 4.2 U7（CAT9554，I2C 0x20）—— IO 扩展，**不是计量芯片**
+
+> 主控板背面照片确认：U7 = 16 脚 IO 扩展，周边走线为 `SCL/SDA(GPIO3)/NT(GPIO4)` + `RE1~RE4/KEY1~KEY3`；
+> **计量芯片是旁边的 U9（8 脚，CSE7766）**，其数据从模组左侧 `RX1`(GPIO13) 进入。勿把 U7 当计量芯片。
+
 
 | U7 位 | 网络 | 功能 | 固件实体 |
 |---|---|---|---|

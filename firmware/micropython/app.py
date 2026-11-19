@@ -26,7 +26,7 @@ from cat9554 import CAT9554, KEY1, KEY2, KEY3, RELAY0, RELAY1, RELAY2, RELAY3
 from cse7766 import CSE7766
 import store
 
-FW_VERSION = "1.2.5"
+FW_VERSION = "1.2.6"
 TYPE = "DC1"
 UDP_PORT = 54321
 PROV_WINDOW_MS = 30000
@@ -62,17 +62,31 @@ WIFI_BLINK_MS = 500       # 1 秒周期慢闪 = 500ms 亮 + 500ms 灭
 
 
 # ---------------------------------------------------------------- 小工具
+# UART1 日志口：GPIO2 = LOG_TX，只发不收，115200。
+# 与 UART0（计量 GPIO13/15 + 烧录 GPIO1/3）及 I2C(U7) 完全独立，三者无冲突。
+# 注意 GPIO2 是启动 strap（外部上拉），作 TX 只输出高/数据，不影响 boot。
+uart1 = None
+
+
+def uart1_write(msg):
+    """从 LOG_TX(GPIO2/UART1 TX) 输出一行日志。失败静默，绝不影响主流程。"""
+    if uart1 is not None:
+        try:
+            uart1.write("%s\n" % msg)
+        except Exception:
+            pass
+
+
 def log_err(where, e):
-    """把运行时异常写进 err.log，同时打到串口"""
-    try:
-        print("ERR[%s] %r" % (where, e))
-    except Exception:
-        pass
+    """把运行时异常写进 err.log，同时从 LOG_TX 与 /api/log 输出"""
+    txt = "ERR[%s] %r" % (where, e)
+    uart1_write(txt)
     try:
         with open("err.log", "a") as f:
             f.write("%s: %r\n" % (where, e))
     except Exception:
         pass
+    log(txt)
 
 
 def read_log(name, n=1500):
@@ -84,8 +98,9 @@ def read_log(name, n=1500):
 
 
 def log(msg):
-    """日志写 boot.log，用 HTTP GET /api/log 读取。
-    计量模式 UART0 swap 给 CSE7766，TX/RX 运行期不输出；烧录走 UART0 下载模式不受影响。"""
+    """日志双输出：boot.log（HTTP GET /api/log 读）+ LOG_TX（UART1/GPIO2, 115200 实打）。
+    UART0 让给 CSE7766 计量与烧录，UART1 独立，日志与计量/继电器/I2C 三者无冲突。"""
+    uart1_write(msg)                       # LOG_TX 实时输出
     try:
         with open("boot.log", "a") as f:
             f.write("%s\n" % msg)
@@ -1113,6 +1128,17 @@ except Exception:
 
 # WiFi 灯 GPIO0：main.py 的 3s 下载窗口已过，配置为输出不影响烧录
 wifi_led_init()
+
+# LOG_TX 日志口：UART1(GPIO2, TX-only, 115200)，与计量 UART0/I2C 独立。
+# 放在第一条 log 之前，保证上电启动日志也能从 LOG_TX 实时抓到。
+try:
+    try:
+        uart1 = UART(1, baudrate=115200, tx=2)   # 明确指定 GPIO2
+    except Exception:
+        uart1 = UART(1, baudrate=115200)         # UART1 TX 默认就在 GPIO2
+    uart1.write("LOG_TX ready\n")
+except Exception as e:
+    uart1 = None
 
 log("boot start FW=%s id=%s free=%d debug=%s" % (
     FW_VERSION, uid, gc.mem_free(), cfg.get("debug_log_tx")))
