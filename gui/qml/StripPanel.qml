@@ -2,12 +2,19 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// DC1 面板：开关 / 计量 / 电量 / 定时（单次或每周重复）/ 倒计时
+// 排插面板（DC1 / TC1 共用）：开关 / 计量 / 电量 / 定时（单次或每周重复）/ 倒计时
+// 通道与计量能力由 devType 决定：
+//   DC1 = total/1/2/3/logo，CSE7766 有 V/A/W
+//   TC1 = total/1..6，BL0937 只有 W（CF 脉冲）
 Item {
     id: panel
 
     property var state: ({})
     property var rules: []
+    property string devType: "DC1"
+
+    readonly property bool isTc1: devType === "TC1"
+    readonly property bool hasVA: !isTc1
 
     signal toggle(string ch, bool on)
     signal addSched(var rule)
@@ -21,13 +28,21 @@ Item {
     readonly property color dim: "#8a92a6"
     readonly property color accent: "#c62828"
 
-    readonly property var plugs: [
+    readonly property var plugs: isTc1 ? [
+        { k: "total", n: "总开关" },
+        { k: "1", n: "插孔 1" }, { k: "2", n: "插孔 2" }, { k: "3", n: "插孔 3" },
+        { k: "4", n: "插孔 4" }, { k: "5", n: "插孔 5" }, { k: "6", n: "插孔 6" }
+    ] : [
         { k: "total", n: "总开关" }, { k: "1", n: "插孔 1" },
         { k: "2", n: "插孔 2" }, { k: "3", n: "插孔 3" },
         { k: "logo", n: "LOGO 灯" }
     ]
-    readonly property var chNames: ["总开关", "插孔1", "插孔2", "插孔3"]
-    readonly property var chKeys: ["total", "1", "2", "3"]
+    readonly property var chNames: isTc1
+        ? ["总开关", "插孔1", "插孔2", "插孔3", "插孔4", "插孔5", "插孔6"]
+        : ["总开关", "插孔1", "插孔2", "插孔3"]
+    readonly property var chKeys: isTc1
+        ? ["total", "1", "2", "3", "4", "5", "6"]
+        : ["total", "1", "2", "3"]
     readonly property var dayNames: ["一", "二", "三", "四", "五", "六", "日"]
 
     property var daySel: [true, true, true, true, true, true, true]
@@ -128,19 +143,30 @@ Item {
                             Item { Layout.fillWidth: true }
                             Button {
                                 text: qsTr("标定…")
+                                visible: panel.hasVA
                                 implicitHeight: 24
                                 font.pixelSize: 11
                                 onClicked: panel.calibrate()
+                            }
+                            Text {
+                                visible: !panel.hasVA
+                                text: qsTr("只测功率 · 用 cal --power 标定")
+                                color: panel.dim
+                                font.pixelSize: 10
                             }
                         }
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 18
                             Repeater {
-                                model: [
+                                model: panel.hasVA ? [
                                     { t: "电压", u: "V", v: (panel.state.meter || {}).voltage },
                                     { t: "电流", u: "A", v: (panel.state.meter || {}).current },
                                     { t: "功率", u: "W", v: (panel.state.meter || {}).power }
+                                ] : [
+                                    { t: "功率", u: "W", v: (panel.state.meter || {}).power },
+                                    { t: "CF", u: "Hz", v: (panel.state.meter || {}).p_raw },
+                                    { t: "脉冲常数", u: "imp/kWh", v: (panel.state.meter || {}).k_imp }
                                 ]
                                 delegate: Column {
                                     required property var modelData

@@ -8,7 +8,7 @@ ApplicationWindow {
     width: 1200
     height: 780
     visible: true
-    title: qsTr("DC1 Console · 局域网智能排插上位机")
+    title: qsTr("DC1/TC1 Console · 局域网智能排插上位机")
     color: "#0f1115"
     font.family: "Microsoft YaHei"
     font.pixelSize: 13
@@ -36,6 +36,34 @@ ApplicationWindow {
         Cli.run(args)
     }
 
+    function demoState(t) {
+        if (t === "TC1")
+            return { type: "TC1", fw: "1.0.0", ip: "192.168.1.11", rssi: -61,
+                     total: false, "1": true, "2": true, "3": false,
+                     "4": true, "5": false, "6": true,
+                     ap: 0, prov: 0,
+                     meter: { voltage: 0, current: 0, power: 84.2,
+                              p_raw: 134.7, k_imp: 1600, pulses: 91234,
+                              calibrated: 0 },
+                     energy: { total_kwh: 3.215, today_kwh: 0.408 },
+                     cd: [{ id: 1, ch: "6", on: false, left: 1320 }],
+                     sched: 1 }
+        return { type: "DC1", fw: "1.1.0", ip: "192.168.1.9", rssi: -58,
+                 total: true, "1": true, "2": false, "3": true, logo: true,
+                 ap: 0, prov: 0,
+                 meter: { voltage: 220.4, current: 0.271, power: 59.8 },
+                 energy: { total_kwh: 12.483, today_kwh: 0.912 },
+                 cd: [{ id: 2, ch: "1", on: false, left: 843 }],
+                 sched: 2 }
+    }
+
+    function demoRules(t) {
+        if (t === "TC1")
+            return [{ id: 1, ch: "4", on: true, hh: 18, mm: 30, days: 62, en: 1 }]
+        return [{ id: 1, ch: "total", on: true, hh: 7, mm: 30, days: 31, en: 1 },
+                { id: 2, ch: "1", on: false, hh: 23, mm: 0, days: 0, en: 1 }]
+    }
+
     function selectDevice(d) {
         curIp = d.ip || ""
         curType = d.type || ""
@@ -43,6 +71,12 @@ ApplicationWindow {
         st = ({})
         rules = []
         status = qsTr("已选择 ") + curName + " @ " + curIp
+        if (DemoMode) {
+            st = demoState(curType)
+            rules = demoRules(curType)
+            status = qsTr("演示模式 · 未连接真实设备")
+            return
+        }
         refresh()
     }
 
@@ -139,7 +173,9 @@ ApplicationWindow {
             devices = [{ name: "客厅排插", type: "DC1", id: "dc1-a1b2",
                          ip: "192.168.1.9", fw: "1.1.0", prov: 0 },
                        { name: "卧室排插", type: "DC1", id: "dc1-c3d4",
-                         ip: "192.168.1.10", fw: "1.1.0", prov: 1 }]
+                         ip: "192.168.1.10", fw: "1.1.0", prov: 1 },
+                       { name: "书房TC1", type: "TC1", id: "tc1-ab12",
+                         ip: "192.168.1.11", fw: "1.0.0", prov: 0 }]
             curIp = "192.168.1.9"
             curType = "DC1"
             curName = "客厅排插"
@@ -340,7 +376,8 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     sourceComponent: root.curType === "" ? null
-                                   : root.curType === "DC1" ? dc1Comp : genericComp
+                                   : (root.curType === "DC1" || root.curType === "TC1")
+                                     ? devComp : genericComp
                 }
             }
         }
@@ -348,8 +385,9 @@ ApplicationWindow {
 
     // ---------------- 设备面板
     Component {
-        id: dc1Comp
-        Dc1Panel {
+        id: devComp
+        StripPanel {
+            devType: root.curType
             state: root.st
             rules: root.rules
             onToggle: function (ch, on) {

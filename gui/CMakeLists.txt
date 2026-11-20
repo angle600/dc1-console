@@ -24,7 +24,7 @@ qt_add_resources(dc1console "qml"
     PREFIX "/"
     FILES
         qml/Main.qml
-        qml/Dc1Panel.qml
+        qml/StripPanel.qml
         qml/GenericPanel.qml
         qml/ProvisionDialog.qml
         qml/FirmwareDialog.qml
