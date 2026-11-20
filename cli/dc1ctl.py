@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""dc1ctl —— DC1 内网工具链（纯标准库，GUI 也调它，保证 GUI/CLI 同一套逻辑）
+"""dc1ctl —— DC1 / TC1 内网工具链（纯标准库，GUI 也调它，保证 GUI/CLI 同一套逻辑）
+
+DC1 与 TC1 走同一套 UDP 54321 + HTTP JSON 协议，只有通道数不同：
+DC1 = total/1/2/3/logo，TC1 = total/1..6。命令本身全部通用，
+`--ch` 直接写设备支持的通道名即可；类型由设备 /api/info 返回的 type 决定。
 
 子命令：
     discover                         UDP 54321 广播发现（含未配网设备）
     prov --ssid X --pass Y           上电 30 秒内配网（UDP）
     ping / info                      连通性与设备身份
     state                            开关 + 计量 + 电量 + 倒计时
-    switch --ch 1 --on 1             开关（ch: total/1/2/3/logo）
+    switch --ch 1 --on 1             开关（DC1: total/1/2/3/logo；TC1: total/1..6）
     sched list|add|del|clear         定时：--once 单次，--days 1,2,3 / --daily 每周重复
     countdown list|add|del|clear     倒计时：--ch 1 --on 0 --min 30
     meter                            电压/电流/功率/原始计数
     time                             用本机时间校准设备（定时功能需要）
-    fw update --dir firmware/micropython    WiFi 覆盖源码（MicroPython 固件更新）
+    fw update --dir firmware/micropython    WiFi 覆盖源码（DC1；TC1 用 --dir firmware/tc1）
     fw core --serial COM5 --img x.bin       首次烧内核（转调 esptool）
 
 通用参数：--ip / --id 指定设备，--json 输出机器可读结果，--token API token
@@ -216,15 +220,31 @@ def emit(obj, as_json, human=None):
         print(json.dumps(obj, ensure_ascii=False, indent=2))
 
 
+CHANNELS = {"DC1": ("total", "1", "2", "3", "logo"),
+            "TC1": ("total", "1", "2", "3", "4", "5", "6")}
+CH_LABEL = {"total": "总", "logo": "LOGO"}
+
+
+def channels_of(s):
+    """按设备上报的 type 选通道集；不认识就按 DC1 兜底。"""
+    return CHANNELS.get(s.get("type") or "", CHANNELS["DC1"])
+
+
 def fmt_state(s):
-    sw = "  ".join("%s=%s" % (k, "ON " if s.get(k) else "OFF")
-                   for k in ("total", "1", "2", "3", "logo"))
+    sw = "  ".join("%s=%s" % (CH_LABEL.get(k, k), "ON " if s.get(k) else "OFF")
+                   for k in channels_of(s))
     m = s.get("meter") or {}
     e = s.get("energy") or {}
-    lines = [sw,
-             "V=%.1f  A=%.3f  W=%.1f" % (m.get("voltage", 0),
-                                          m.get("current", 0),
-                                          m.get("power", 0)),
+    if m.get("voltage") or m.get("current"):
+        mline = "V=%.1f  A=%.3f  W=%.1f" % (m.get("voltage", 0),
+                                           m.get("current", 0),
+                                           m.get("power", 0))
+    else:
+        # TC1 出厂只贴了 CF 通道，没有 V/A
+        mline = "W=%.1f  CF=%.1f Hz  K=%.0f imp/kWh%s" % (
+            m.get("power", 0), m.get("p_raw", 0), m.get("k_imp", 0),
+            "" if m.get("calibrated") else "（未标定）")
+    lines = [sw, mline,
              "今日 %.3f kWh / 累计 %.3f kWh" % (e.get("today_kwh", 0),
                                                 e.get("total_kwh", 0)),
              "定时 %s 条，倒计时 %s 条" % (s.get("sched", 0), len(s.get("cd") or []))]
@@ -366,6 +386,12 @@ def cmd_countdown(a):
 def cmd_meter(a):
     host = resolve(a)
     m = get_json(host, "/api/meter", a.token)
+    if m.get("k_imp"):
+        # TC1：只有功率（CF 脉冲），没有 V/A
+        emit(m, a.json, "W=%.1f  CF=%.1f Hz  K=%.0f imp/kWh  脉冲计数=%s%s" %
+             (m.get("power", 0), m.get("p_raw", 0), m.get("k_imp", 0),
+              m.get("pulses"), "" if m.get("calibrated") else "（未标定）"))
+        return
     emit(m, a.json, "V=%.1f A=%.3f W=%.1f  (raw v=%s i=%s p=%s)" %
          (m.get("voltage", 0), m.get("current", 0), m.get("power", 0),
           m.get("v_raw"), m.get("i_raw"), m.get("p_raw")))
@@ -384,6 +410,13 @@ def cmd_cal(a):
             or getattr(a, "v1r", None) or getattr(a, "v2r", None)
             or getattr(a, "hardware", False)):
         r = get_json(host, "/api/cal", a.token)
+        if r.get("k_imp"):
+            emit(r, a.json,
+                 "当前读数  W=%.1f  CF=%.1f Hz\n脉冲常数 K=%.2f imp/kWh（%s）\n"
+                 "标定：cal --power <外部功率计读数 W>" %
+                 (r.get("power", 0), r.get("p_raw", 0), r.get("k_imp", 0),
+                  "已标定" if r.get("calibrated") else "出厂估算值，未标定"))
+            return
         m = r.get("meter") or {}
         me = r.get("measured") or {}
         emit(r, a.json,
@@ -439,6 +472,9 @@ def cmd_cal(a):
         body["power"] = a.power
     r = http(host, "/api/cal", "POST", body, a.token)
     if r.get("ok"):
+        if r.get("k_imp"):
+            emit(r, a.json, "标定完成：K=%.2f imp/kWh" % r["k_imp"])
+            return
         g = r.get("gains") or {}
         emit(r, a.json, "标定完成：v=%.6f i=%.6f p=%.6f" %
              (g.get("v_gain", 1), g.get("i_gain", 1), g.get("p_gain", 1)))
@@ -465,11 +501,24 @@ def cmd_fw(a):
             subprocess.run(c, check=True)
         return
     host = resolve(a)
-    d = pathlib.Path(a.dir or (ROOT / "firmware" / "micropython"))
+    # 不指定 --dir 时按设备类型选默认源码目录：DC1 -> micropython，TC1 -> tc1
+    dtype = get_json(host, "/api/info", a.token).get("type") or ""
+    if a.dir:
+        d = pathlib.Path(a.dir)
+    elif dtype == "TC1":
+        d = ROOT / "firmware" / "tc1"
+    else:
+        d = ROOT / "firmware" / "micropython"
     if not d.exists():
         sys.exit("目录不存在：%s" % d)
-    names = a.only or ["main.py", "store.py", "cat9554.py", "cse7766.py",
-                       "webui.py", "config.json"]
+    if a.only:
+        names = a.only
+    elif dtype == "TC1":
+        names = ["main.py", "app.py", "board.py", "bl0937.py", "store.py",
+                 "index.html", "config.json"]
+    else:
+        names = ["main.py", "store.py", "cat9554.py", "cse7766.py",
+                 "webui.py", "config.json"]
     mpy_dir = pathlib.Path(a.mpy_dir or (ROOT / "firmware" / "build" / "mpy"))
     ok, fail = [], []
     for n in names:
@@ -506,7 +555,7 @@ def cmd_fw(a):
 
 
 def main():
-    p = argparse.ArgumentParser(description="DC1 内网控制/配网/升级 CLI")
+    p = argparse.ArgumentParser(description="DC1 / TC1 内网控制/配网/升级 CLI")
     p.add_argument("--json", action="store_true", help="机器可读输出")
     p.add_argument("--ip", help="直接指定设备 IP")
     p.add_argument("--dev", help="按设备 id 选择")
@@ -537,7 +586,7 @@ def main():
 
     sw = sub.add_parser("switch", parents=[common])
     sw.add_argument("--ch", default="total",
-                    choices=["total", "1", "2", "3", "logo"])
+                    help="通道：DC1=total/1/2/3/logo，TC1=total/1..6")
     sw.add_argument("--on", type=int, default=1)
     sw.set_defaults(func=cmd_switch)
 

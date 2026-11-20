@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mp_deploy —— 用 WiFi（HTTP）把 MicroPython 代码推到 DC1，无需串口/WebREPL
+"""mp_deploy —— 用 WiFi（HTTP）把 MicroPython 代码推到 DC1 / TC1，无需串口/WebREPL
 
 设备端由 firmware/micropython/main.py 提供：
     PUT /api/file?name=main.py   （body = 文件内容，需 X-Token）
@@ -8,6 +8,7 @@
     python tools/mp_deploy.py --host 192.168.4.1 --token change-me-token
     python tools/mp_deploy.py --host dc1.local --token xxx --only main.py
     python tools/mp_deploy.py --host 192.168.4.1 --state
+    python tools/mp_deploy.py --host 192.168.4.1 --dir firmware/tc1   # TC1 换脑版
     python tools/mp_deploy.py --serial COM5 --flash-img ESP8266_GENERIC-FLASH_1M-*.bin
 
 首次仍需串口烧 MicroPython 内核（--flash-img）；之后改代码全走 WiFi。
@@ -25,6 +26,13 @@ import urllib.request
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "firmware" / "micropython"
 DEFAULT_FILES = ["main.py", "cat9554.py", "cse7766.py", "webui.py", "config.json"]
+# TC1（换脑版）文件集：没有 IO 扩展/串口计量，多了 board/bl0937 与网页
+TC1_FILES = ["main.py", "app.py", "board.py", "bl0937.py", "store.py",
+             "index.html", "config.json"]
+
+
+def files_for(src):
+    return TC1_FILES if src.name == "tc1" else DEFAULT_FILES
 
 
 def put(host, name, data, token, timeout=20):
@@ -45,23 +53,31 @@ def get(host, path, token="", timeout=10):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="DC1 MicroPython WiFi 部署")
+    ap = argparse.ArgumentParser(description="DC1 / TC1 MicroPython WiFi 部署")
     ap.add_argument("--host", default="192.168.4.1", help="设备 IP 或主机名")
     ap.add_argument("--token", default=os.environ.get("DC1_TOKEN", ""),
                     help="config.json 里的 api_token")
     ap.add_argument("--only", nargs="*", help="只传指定文件")
+    ap.add_argument("--dir", default="firmware/micropython",
+                    help="源码目录（TC1 用 firmware/tc1）")
     ap.add_argument("--state", action="store_true", help="读 /api/state 后退出")
     ap.add_argument("--serial", help="首次烧内核用：串口，如 COM5")
     ap.add_argument("--flash-img", help="首次烧内核用：MicroPython 1M 固件 .bin")
     ap.add_argument("--erase", action="store_true", help="烧内核前整片擦除")
     args = ap.parse_args()
 
+    src = pathlib.Path(args.dir)
+    if not src.is_absolute():
+        src = ROOT / src
+    if not src.exists():
+        sys.exit("目录不存在：%s" % src)
+
     if args.flash_img:
         if not args.serial:
             sys.exit("--flash-img 需要同时给 --serial")
         img = args.flash_img
         if not os.path.isabs(img) and not os.path.exists(img):
-            cand = SRC / img
+            cand = src / img
             img = str(cand) if cand.exists() else img
         cmds = []
         if args.erase:
@@ -79,9 +95,9 @@ def main():
         print(json.dumps(d, ensure_ascii=False, indent=2))
         return
 
-    files = args.only or DEFAULT_FILES
+    files = args.only or files_for(src)
     for name in files:
-        p = SRC / name
+        p = src / name
         if not p.exists():
             if name == "config.json":
                 print("skip config.json（请先按 config.example.json 生成）")
