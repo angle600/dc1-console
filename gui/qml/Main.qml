@@ -26,6 +26,8 @@ ApplicationWindow {
     property string curName: ""
     property string status: qsTr("就绪 · 点「发现设备」")
     property string pending: ""
+    // 上一次的开关状态指纹：只有它变化才重建界面，避免每 2.5s 整体替换 st 造成闪烁
+    property string stKey: ""
 
     function call(tag, args) {
         if (Cli.busy)
@@ -72,8 +74,14 @@ ApplicationWindow {
                 }
             } else if (pending === "state") {
                 if (data && data.type !== undefined) {
-                    st = data
-                    curType = data.type
+                    // 仅在开关/在线状态真正变化时才替换 st（否则 QML 会销毁重建所有控件 -> 闪烁）
+                    var k = "" + data.total + data["1"] + data["2"] + data["3"] +
+                            data.logo + data.ap
+                    if (k !== root.stKey) {
+                        root.stKey = k
+                        st = data
+                        curType = data.type
+                    }
                     status = qsTr("在线 · ") + (data.ip || curIp) +
                              " · " + (data.ap ? qsTr("AP 模式") : (data.rssi + " dBm"))
                 }
@@ -117,7 +125,7 @@ ApplicationWindow {
     }
 
     Timer {
-        interval: 2500
+        interval: 5000
         repeat: true
         running: curIp !== ""
         onTriggered: {

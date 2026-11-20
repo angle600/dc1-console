@@ -26,7 +26,7 @@ from cat9554 import CAT9554, KEY1, KEY2, KEY3, RELAY0, RELAY1, RELAY2, RELAY3
 from cse7766 import CSE7766
 import store
 
-FW_VERSION = "1.2.7"
+FW_VERSION = "1.2.12"
 TYPE = "DC1"
 UDP_PORT = 54321
 PROV_WINDOW_MS = 30000
@@ -287,9 +287,29 @@ def set_gains():
         meter.v2r = float(m.get("v2r", 1.0))
 
 
+RELAY_GAP_MS = 500
+_last_rly = 0
+
+
 def relay_write(ch, on):
+    """写一路继电器。v1.2.8 校验 U7 方向寄存器(掉电复位自愈)；v1.2.11 相邻动作间隔 500ms。"""
+    global _last_rly
+    g = RELAY_GAP_MS - time.ticks_diff(time.ticks_ms(), _last_rly)
+    if g > 0 and _last_rly:
+        time.sleep_ms(g)
     if u7 is not None:
-        u7.write_pin(RELAY_BIT[ch], 1 if on else 0)
+        try:
+            if not u7.is_configured():
+                u7.reinit()
+                log("u7 reinit: cfg restored")
+            u7.write_pin(RELAY_BIT[ch], 1 if on else 0)
+        except Exception:
+            try:
+                u7.reinit()
+                u7.write_pin(RELAY_BIT[ch], 1 if on else 0)
+            except Exception:
+                pass
+    _last_rly = time.ticks_ms()
     relay_state[ch] = bool(on)
 
 
@@ -386,8 +406,14 @@ def restore_state():
             relay_write(k, False)
             state[k] = False
     logo_write(bool(s.get("logo", True)))
-    log("relay: total=%s 1=%s 2=%s 3=%s" % (
-        state["total"], state["1"], state["2"], state["3"]))
+    # 回读实际寄存器，确认真的写进去了（不再只信内存字典）
+    real = -1
+    try:
+        real = u7._rd(0x01) if u7 is not None else -1
+    except Exception:
+        pass
+    log("relay: total=%s 1=%s 2=%s 3=%s out=0x%02X" % (
+        state["total"], state["1"], state["2"], state["3"], real & 0xFF))
 
 
 # ---------------------------------------------------------------- 按键
@@ -890,6 +916,19 @@ def handle(conn):
                      % (TYPE, FW_VERSION))
     if path == "/api/info":
         return reply(conn, "200 OK", json.dumps(info_obj()))
+    if path == "/api/hw":
+        # 硬件诊断：U7 方向/输出/输入寄存器 + 是否已复位（cfg 应为 0x0F）
+        d = {"uart0": uart0 is not None, "i2c": i2c is not None,
+             "u7": u7 is not None, "meter": meter is not None}
+        if u7 is not None:
+            try:
+                d["cfg"] = u7._rd(0x03)
+                d["out"] = u7._rd(0x01)
+                d["in"] = u7._rd(0x00)
+                d["cfg_ok"] = (d["cfg"] == 0x0F)
+            except Exception as e:
+                d["err"] = repr(e)
+        return reply(conn, "200 OK", json.dumps(d))
     if path == "/api/state":
         return reply(conn, "200 OK", state_json())
     if path == "/api/put" and method == "POST":
@@ -1158,15 +1197,27 @@ energy = store.Energy()
 # 注意：restore_state 已移到 init_hw() 之后调用——U7 未初始化时 relay_write 只改内存字典，
 # 继电器不会真正吸合。见下方硬件初始化之后。
 
-# LOGO 已亮后再采 KEY1。按住开机 → 强制 AP，不连已记录的 SSID。
+# LOGO 已亮后再采 KEY1。
+#   按住总键开机 → ① 照旧强制进 AP 配网（原功能不变）
+#                   ② v1.2.12 新增：复位默认状态（所有开关置开 + 清空定时器/倒计时）
 force_ap = False
+reset_all = False
 try:
-    force_ap = key1_held()
+    reset_all = key1_held()
+    force_ap = reset_all
 except Exception as e:
     pass
     log("key1_held fail: %s" % e)
-log("force_ap: %s" % force_ap)
-pass
+log("force_ap: %s reset_all: %s" % (force_ap, reset_all))
+if reset_all:
+    try:
+        save_json(STATE_FILE, {"total": True, "1": True, "2": True, "3": True, "logo": True})
+        sched.rules = []
+        sched.flush()
+        cd.clear()
+        log("RESET: all switches ON, sched+cd cleared")
+    except Exception as e:
+        log_err("reset", e)
 
 w = None if force_ap else wifi_sta()
 if w is None:
@@ -1263,6 +1314,15 @@ while True:
         time.sleep_ms(150)
         machine.reset()
     last_iter = _now
+    # ★ v1.2.8 自愈：U7 因 5V 跌落复位后 CFG 会回 0xFF（全输入），继电器从此不动。
+    #   每 100 轮（≈5s）校验一次方向寄存器，异常立即重配。
+    if u7 is not None and loop_n % 100 == 0:
+        try:
+            if not u7.is_configured():
+                u7.reinit()
+                log("u7 reinit: cfg restored (watch)")
+        except Exception:
+            pass
     if gc and loop_n % 50 == 0:
         gc.collect()
         _f = gc.mem_free()
