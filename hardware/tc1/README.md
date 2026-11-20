@@ -21,6 +21,7 @@
 | `datasheet/BL0937_V1.02_cn.pdf` | 电量计量芯片手册 | CF 脉冲频率 ↔ 功率换算、出厂脉冲常数 |
 | `datasheet/HF-LPX30系列模块用户手册_CN.pdf` | 汉枫 HF-LPX30 系列（含 LPT230 16 脚定义、AT 指令、升级） | A2 引脚权威依据 |
 | `datasheet/EMW3031产品手册_DS0021CN_V1.4.pdf` | 庆科 EMW3031 手册（Cortex-M4F 100MHz / 192KB RAM / 2MB Flash） | A1 主控能力边界 |
+| `datasheet/ESPC3-12E_DOIT_datasheet.pdf` | DOIT ESPC3-12E（ESP32-C3 / 4MB / 15 GPIO / 24×16）手册与焊盘图 | 换脑可选 C3 模组的脚位依据 |
 | `TC1-原理框图.svg` | 本仓库自绘的信号/功率流向图 | 一图看懂整机 |
 
 ## 2. 整机拓扑（依据实物照 + 手绘图）
