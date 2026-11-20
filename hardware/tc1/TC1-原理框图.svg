@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 720" width="1080" height="720" font-family="Microsoft YaHei, PingFang SC, Helvetica, Arial, sans-serif">
+  <title>斐讯 TC1 智能插排 原理框图（实物反推整理）</title>
+  <rect width="1080" height="720" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="700" fill="#111">斐讯 TC1 智能插排 · 原理框图（实物反推整理版）</text>
+  <text x="24" y="56" font-size="12" fill="#666">官方未公开原理图；依据拆机实拍、社区按 PCB 手绘图（limbang/TC1A2）与 BL0937/HF-LPT230/EMW3031 手册整理。橙=强电，蓝=逻辑，绿=电源，灰虚线=出厂未贴装。</text>
+
+  <!-- ================= 左侧：强电输入链 ================= -->
+  <rect x="24" y="96" width="150" height="58" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+  <text x="99" y="120" font-size="13" text-anchor="middle" fill="#7a4a00" font-weight="700">AC 220V</text>
+  <text x="99" y="140" font-size="11" text-anchor="middle" fill="#7a4a00">L / N / PE</text>
+
+  <path d="M99 154 V166" stroke="#e08600" stroke-width="3"/>
+  <polygon points="93,166 99,178 105,166" fill="#e08600"/>
+
+  <rect x="24" y="178" width="150" height="56" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+  <text x="99" y="201" font-size="12" text-anchor="middle" fill="#7a4a00" font-weight="700">防雷 / 保险</text>
+  <text x="99" y="219" font-size="11" text-anchor="middle" fill="#7a4a00">压敏 + 保险丝</text>
+
+  <path d="M99 234 V246" stroke="#e08600" stroke-width="3"/>
+  <polygon points="93,246 99,258 105,246" fill="#e08600"/>
+
+  <rect x="24" y="258" width="150" height="56" rx="8" fill="#ffe0b2" stroke="#d2691e" stroke-width="2"/>
+  <text x="99" y="281" font-size="12" text-anchor="middle" fill="#7a3b00" font-weight="700">总机械开关</text>
+  <text x="99" y="299" font-size="11" text-anchor="middle" fill="#7a3b00">盒体上，手控 6 路总断</text>
+
+  <path d="M99 314 V326" stroke="#e08600" stroke-width="3"/>
+  <polygon points="93,326 99,338 105,326" fill="#e08600"/>
+
+  <rect x="24" y="338" width="150" height="52" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+  <text x="99" y="360" font-size="12" text-anchor="middle" fill="#7a4a00" font-weight="700">R_sense 采样电阻</text>
+  <text x="99" y="378" font-size="11" text-anchor="middle" fill="#7a4a00">1 mΩ 级，串在 L 上</text>
+
+  <!-- AC L 母线 -->
+  <path d="M174 364 H270" stroke="#e08600" stroke-width="3"/>
+  <path d="M270 130 V520" stroke="#e08600" stroke-width="3"/>
+  <text x="276" y="118" font-size="11" fill="#a0522d">AC L（总开关之后）</text>
+
+  <!-- ================= 中列：6 路继电器 ================= -->
+  <g>
+    <rect x="300" y="120" width="300" height="60" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+    <text x="316" y="144" font-size="12" fill="#7a4a00" font-weight="700">RELAY1 → 插孔 1</text>
+    <text x="316" y="164" font-size="10.5" fill="#8a5a00">A2: GPIO22 · 换脑: GPIO5 (D1)</text>
+
+    <rect x="300" y="190" width="300" height="60" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+    <text x="316" y="214" font-size="12" fill="#7a4a00" font-weight="700">RELAY2 → 插孔 2</text>
+    <text x="316" y="234" font-size="10.5" fill="#8a5a00">A2: GPIO24 · 换脑: GPIO4 (D2)</text>
+
+    <rect x="300" y="260" width="300" height="60" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+    <text x="316" y="284" font-size="12" fill="#7a4a00" font-weight="700">RELAY3 → 插孔 3</text>
+    <text x="316" y="304" font-size="10.5" fill="#8a5a00">A2: GPIO8 · 换脑: GPIO14 (D5)</text>
+
+    <rect x="300" y="330" width="300" height="60" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+    <text x="316" y="354" font-size="12" fill="#7a4a00" font-weight="700">RELAY4 → 插孔 4</text>
+    <text x="316" y="374" font-size="10.5" fill="#8a5a00">A2: GPIO23 · 换脑: GPIO12 (D6)</text>
+
+    <rect x="300" y="400" width="300" height="60" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+    <text x="316" y="424" font-size="12" fill="#7a4a00" font-weight="700">RELAY5 → 插孔 5</text>
+    <text x="316" y="444" font-size="10.5" fill="#8a5a00">A2: GPADC0 · 换脑: GPIO13 (D7)</text>
+
+    <rect x="300" y="470" width="300" height="60" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+    <text x="316" y="494" font-size="12" fill="#7a4a00" font-weight="700">RELAY6 → 插孔 6</text>
+    <text x="316" y="514" font-size="10.5" fill="#8a5a00">A2: GPIO3 · 换脑: GPIO16 (D0)</text>
+  </g>
+
+  <!-- 强电支路（橙，左侧进） -->
+  <g stroke="#e08600" stroke-width="2.5" fill="none">
+    <path d="M270 138 H300"/><path d="M270 208 H300"/><path d="M270 278 H300"/>
+    <path d="M270 348 H300"/><path d="M270 418 H300"/><path d="M270 488 H300"/>
+  </g>
+
+  <!-- ================= 右列：主控 ================= -->
+  <rect x="660" y="110" width="340" height="180" rx="10" fill="#eef4ff" stroke="#1565c0" stroke-width="2"/>
+  <text x="678" y="134" font-size="13" font-weight="700" fill="#0d47a1">主控模组（两种版本）</text>
+  <text x="678" y="156" font-size="11" fill="#1565c0">A1：MXCHIP EMW3031-P · Cortex-M4F 100MHz</text>
+  <text x="678" y="172" font-size="11" fill="#1565c0">　　192KB RAM / 2MB Flash · MiCO OS · SWD 烧写</text>
+  <text x="678" y="192" font-size="11" fill="#1565c0">A2：HF-LPT230 · Cortex-M4 200MHz / 448KB RAM</text>
+  <text x="678" y="208" font-size="11" fill="#1565c0">　　汉枫固件 · UART 230400 升级</text>
+  <text x="678" y="232" font-size="11" font-weight="700" fill="#0d47a1">本仓库换脑方案：ESP-12S + MicroPython</text>
+  <text x="678" y="250" font-size="11" fill="#0d47a1">6 路继电器 + CF 脉冲 + 按键 + LED 全在这里</text>
+  <text x="678" y="272" font-size="10.5" fill="#5a6b85">协议与 DC1 相同：UDP 54321 发现/配网 + HTTP JSON API</text>
+
+  <!-- 控制母线（蓝，右侧进继电器） -->
+  <path d="M660 200 H620" stroke="#1565c0" stroke-width="3"/>
+  <path d="M620 130 V512" stroke="#1565c0" stroke-width="3"/>
+  <g stroke="#1565c0" stroke-width="2.5" fill="none">
+    <path d="M620 150 H600"/><path d="M620 220 H600"/><path d="M620 290 H600"/>
+    <path d="M620 360 H600"/><path d="M620 430 H600"/><path d="M620 500 H600"/>
+  </g>
+  <text x="612" y="116" font-size="11" text-anchor="end" fill="#1565c0">GPIO 控制 6 路 →</text>
+
+  <!-- ================= 计量链 ================= -->
+  <rect x="660" y="320" width="160" height="90" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+  <text x="740" y="343" font-size="12" text-anchor="middle" fill="#7a4a00" font-weight="700">BL0937 (U4)</text>
+  <text x="740" y="361" font-size="10.5" text-anchor="middle" fill="#7a4a00">CF = 有功功率脉冲</text>
+  <text x="740" y="377" font-size="10.5" text-anchor="middle" fill="#7a4a00">CF1 / SEL 未贴装</text>
+  <text x="740" y="396" font-size="10" text-anchor="middle" fill="#a0522d">P(W) = 1000·f / K</text>
+
+  <path d="M99 390 H200 V630 H640 V405 H660" stroke="#e08600" stroke-width="1.6" stroke-dasharray="6 5" fill="none"/>
+  <polygon points="648,399 660,405 648,411" fill="#e08600"/>
+  <text x="210" y="624" font-size="10" fill="#a0522d">R_sense 差分 → BL0937（经 1mΩ 采样）</text>
+
+  <rect x="840" y="330" width="160" height="70" rx="8" fill="#eef4ff" stroke="#1565c0" stroke-width="2"/>
+  <text x="920" y="353" font-size="12" text-anchor="middle" fill="#0d47a1" font-weight="700">U3 EL1019 光耦</text>
+  <text x="920" y="370" font-size="10.5" text-anchor="middle" fill="#1565c0">强电/逻辑完全隔离</text>
+  <text x="920" y="387" font-size="10.5" text-anchor="middle" fill="#1565c0">A2: GPIO7 · 换脑: GPIO3</text>
+
+  <path d="M820 365 H840" stroke="#e08600" stroke-width="2.5"/>
+  <polygon points="840,359 852,365 840,371" fill="#e08600"/>
+  <path d="M920 330 V290" stroke="#1565c0" stroke-width="2.5"/>
+  <polygon points="914,302 920,290 926,302" fill="#1565c0"/>
+
+  <!-- ================= 电源链 ================= -->
+  <rect x="24" y="470" width="150" height="80" rx="8" fill="#eef8ee" stroke="#2e7d32" stroke-width="2"/>
+  <text x="99" y="493" font-size="12" text-anchor="middle" fill="#1b5e20" font-weight="700">AC-DC 降压</text>
+  <text x="99" y="511" font-size="10.5" text-anchor="middle" fill="#2e7d32">非隔离 5V</text>
+  <text x="99" y="528" font-size="10.5" text-anchor="middle" fill="#2e7d32">→ LDO 3.3V</text>
+
+  <path d="M270 510 H174" stroke="#2e7d32" stroke-width="2.5"/>
+  <polygon points="186,504 174,510 186,516" fill="#2e7d32"/>
+
+  <path d="M174 485 H198" stroke="#2e7d32" stroke-width="2" stroke-dasharray="5 4"/>
+  <polygon points="186,479 198,485 186,491" fill="#2e7d32"/>
+  <text x="204" y="480" font-size="10" fill="#2e7d32">5V / 3.3V</text>
+  <text x="204" y="494" font-size="9.5" fill="#2e7d32">线圈 + 主控</text>
+
+  <path d="M700 88 V110" stroke="#2e7d32" stroke-width="2" stroke-dasharray="5 4"/>
+  <polygon points="694,98 700,110 706,98" fill="#2e7d32"/>
+  <text x="708" y="86" font-size="10" fill="#2e7d32">5V / 3.3V</text>
+
+  <!-- ================= USB 板 ================= -->
+  <rect x="24" y="396" width="150" height="66" rx="8" fill="#fff4e6" stroke="#e08600" stroke-width="2"/>
+  <text x="99" y="417" font-size="11.5" text-anchor="middle" fill="#7a4a00" font-weight="700">USB 降压板</text>
+  <text x="99" y="434" font-size="10.5" text-anchor="middle" fill="#7a4a00">3×USB-A + QC3.0 快充</text>
+  <text x="99" y="451" font-size="10" text-anchor="middle" fill="#a0522d">不受 MCU 控制</text>
+
+  <path d="M270 428 H174" stroke="#e08600" stroke-width="2.5"/>
+  <polygon points="186,422 174,428 186,434" fill="#e08600"/>
+
+  <!-- ================= 按键 / LED ================= -->
+  <rect x="660" y="545" width="340" height="80" rx="8" fill="#f6f2ff" stroke="#6a1b9a" stroke-width="2"/>
+  <text x="678" y="568" font-size="12" font-weight="700" fill="#4a148c">按键 + 指示灯</text>
+  <text x="678" y="587" font-size="10.5" fill="#6a1b9a">S7 短按：6 路总开关；长按 3s：进配网 AP</text>
+  <text x="678" y="604" font-size="10.5" fill="#6a1b9a">A2 按键 GPIO25 / LED GPIO5（低点亮）</text>
+  <text x="678" y="620" font-size="10.5" fill="#6a1b9a">换脑：按键 ADC0 / LED GPIO2</text>
+
+  <!-- ================= 底部说明 ================= -->
+  <text x="24" y="650" font-size="11" fill="#666">注：TC1 无独立"总继电器"，6 路插孔各自一只继电器；总开/总关由固件广播到 6 路实现（等价原厂 App 的"总控"）。</text>
+  <text x="24" y="668" font-size="11" fill="#666">　　原厂只贴 CF 通道，电压/电流不可读；BL0937 的 CF1/SEL 支路（U6/U7 输出侧）为未贴装元件，补齐后才可测 V/A。</text>
+  <text x="24" y="686" font-size="11" fill="#666">　　红线：继电器触点直接挂 220V，拆机通电前先贴绝缘胶带；刷机只用 3.3V，不要插市电。</text>
+  <text x="24" y="708" font-size="10" fill="#999">资料来源：limbang/TC1A2（手绘原理图与实拍）、a2633063/zTC1（版本判定）、上海贝岭 BL0937、汉枫 HF-LPX30、庆科 EMW3031 手册。</text>
+</svg>
