@@ -38,6 +38,24 @@
 | 电量 | 实时 V/A/W + 今日/累计 kWh（CSE7766，系数可标定） |
 | 上位机 | 发现设备、按 `type` 选界面、配网、开关、定时、倒计时、电量、**WiFi 更新固件** |
 | 扩展 | 设备类型由 `type` + `features` 驱动，新增类型只需加一个 Panel |
+| **TC1** | **6 位收纳排插的"换脑"支持**（原厂主控非 ESP8266，见下节与 `docs/08-TC1方案.md`） |
+
+## TC1 支持（换脑方案）
+
+斐讯 TC1 是 6 位收纳排插（6 路 + 4 USB），但原厂主控**不是 ESP8266**：
+A1 = MXCHIP EMW3031（MiCO）、A2 = HF-LPT230（汉枫固件），都跑不了 MicroPython。
+本仓库的做法是**换脑**——拆掉原模组、焊 ESP-12S 转接板，跑 `firmware/tc1/`，
+对外协议与 DC1 逐字一致，`cli/dc1ctl.py` 与上位机按 `type` 自动切面板（6 路）。
+
+| 项 | DC1 | TC1 |
+|---|---|---|
+| 主控 | ESP8266（可直接刷） | A1 EMW3031 / A2 HF-LPT230（**必须先换脑**） |
+| 通道 | total + 3 路 + LOGO 灯 | total（虚拟）+ 6 路 |
+| 计量 | CSE7766：V/A/W | BL0937：**只有 W**（出厂只贴 CF 通道） |
+| 总控 | 总继电器 | 盒体机械开关 + 固件广播 6 路 |
+
+资料：`hardware/tc1/`（社区反推原理图、拆机与烧录实拍、BL0937/HF-LPT230/EMW3031 手册、自绘框图）
+→ 接线与烧录步骤见 [`docs/08-TC1方案.md`](docs/08-TC1方案.md)。
 
 ## 界面
 
@@ -51,16 +69,22 @@
 .
 ├── README.md
 ├── cli/dc1ctl.py                 # 唯一业务入口（发现/配网/控制/定时/OTA）
-├── firmware/micropython/         # 设备端固件
+├── firmware/micropython/         # DC1 设备端固件
 │   ├── main.py                   # 配网 + HTTP API + 主循环
 │   ├── store.py                  # 定时/倒计时/电量 持久化
 │   ├── cat9554.py  cse7766.py    # U7 IO 扩展 / 电量计
 │   └── webui.py                  # 手机网页（备用控制面）
+├── firmware/tc1/                 # TC1 换脑固件（ESP-12S）
+│   ├── main.py  app.py           # 启动器 + HTTP/UDP + 主循环
+│   ├── board.py  bl0937.py       # 引脚/继电器/按键 + CF 功率计量
+│   ├── store.py                  # 与 DC1 同源
+│   └── index.html                # 手机网页（6 路）
 ├── gui/                          # Qt 6.8.5 MinGW64 上位机
 │   ├── CMakeLists.txt
 │   ├── main.cpp  clirunner.{h,cpp}
-│   └── qml/{Main,Dc1Panel,GenericPanel,ProvisionDialog,FirmwareDialog}.qml
-├── hardware/                     # 电路图资料 + 自绘原理框图 + datasheet
+│   └── qml/{Main,StripPanel,GenericPanel,ProvisionDialog,FirmwareDialog}.qml
+├── hardware/                     # DC1 电路资料 + DC1-原理框图.svg
+├── hardware/tc1/                 # TC1 电路资料（社区反推）+ TC1-原理框图.svg
 ├── docs/                         # 刷机 / 配网 / AI 控制 / MicroPython 方案
 └── tools/                        # mp_deploy.py（串口烧内核）等辅助脚本
 ```
@@ -268,13 +292,16 @@ GUI 的标定对话框默认勾选 **「按原厂标定：只反求 V1R/V2R」**
 
 ## 扩展新的设备类型
 
+TC1 就是照这个流程加进来的，可以直接抄：
+
 1. 固件里把 `TYPE` 改成新类型（如 `"SC1"`），`features` 列出能力；
-2. `cli/dc1ctl.py` 无需改动（命令按能力走，`--json` 输出统一）；
-3. `gui/qml/` 新增 `Sc1Panel.qml`，在 `Main.qml` 的 `sourceComponent` 里加一条映射：
+2. `cli/dc1ctl.py` 里给 `CHANNELS` 加一行（通道名列表），`fmt_state` 自动适配；
+3. `gui/qml/StripPanel.qml` 是 DC1/TC1 共用面板，通道集由 `devType` 决定；
+   再新类型时在 `Main.qml` 的 `sourceComponent` 里加一条映射，或直接复用 `StripPanel`：
 
 ```qml
-sourceComponent: root.curType === "DC1" ? dc1Comp
-               : root.curType === "SC1" ? sc1Comp
+sourceComponent: root.curType === "" ? null
+               : (root.curType === "DC1" || root.curType === "TC1") ? devComp
                : genericComp
 ```
 
@@ -298,6 +325,8 @@ sourceComponent: root.curType === "DC1" ? dc1Comp
 - [`docs/05-原厂固件.md`](docs/05-原厂固件.md) — 原厂固件怎么读、镜像校验、能挖到什么
 - [`docs/06-装配与标定.md`](docs/06-装配与标定.md) — **装配前检查、装壳、计量标定、故障恢复**
 - [`docs/07-接口手册.md`](docs/07-接口手册.md) — HTTP/UDP 全部接口与鉴权、错误约定
+- [`docs/08-TC1方案.md`](docs/08-TC1方案.md) — **TC1 换脑：接线表、烧录、API 差异、功率标定**
+- [`hardware/tc1/README.md`](hardware/tc1/README.md) — TC1 硬件逆向：A1/A2 版本、引脚表、BL0937 计量链
 
 ## 许可
 
