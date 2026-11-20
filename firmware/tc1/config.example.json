@@ -1,0 +1,13 @@
+{
+  "ssid": "YourHome2.4G",
+  "password": "your-wifi-password",
+  "name": "客厅TC1",
+  "ap_ssid": "TC1-Setup",
+  "ap_pass": "",
+  "hostname": "tc1",
+  "http_port": 80,
+  "api_token": "change-me-token",
+  "boot_default_on": false,
+  "k_imp": 1600.0,
+  "hw": true
+}

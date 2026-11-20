@@ -20,18 +20,22 @@ jobs:
             cli/dc1ctl.py \
             tools/mp_deploy.py \
             tools/dc1ctl.py \
-            firmware/micropython/*.py
+            firmware/micropython/*.py \
+            firmware/tc1/*.py
 
       - name: 固件逻辑单测（定时单次/每周、倒计时、电量）
         run: |
           python tests/test_store.py
           python tests/test_cse7766.py
 
+      - name: TC1 固件逻辑单测（继电器极性/按键/CF 换算/标定/定时/电量）
+        run: python tests/test_tc1_logic.py
+
       - name: JSON 配置校验
         run: |
           python - <<'PY'
           import glob, json
-          for f in glob.glob("firmware/micropython/*.json"):
+          for f in glob.glob("firmware/micropython/*.json") + glob.glob("firmware/tc1/*.json"):
               json.load(open(f, encoding="utf-8"))
               print("json ok:", f)
           PY

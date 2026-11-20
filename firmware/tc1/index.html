@@ -1,0 +1,146 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TC1</title><style>
+*{box-sizing:border-box}body{font-family:-apple-system,"Microsoft YaHei",sans-serif;margin:0;padding:14px;background:#111;color:#eee}
+h3{font-size:15px;margin:18px 0 8px;color:#bbb}
+.row{display:flex;gap:8px;align-items:center;padding:10px 12px;margin:6px 0;background:#1e1e1e;border-radius:10px}
+.row .n{flex:1}
+button{padding:8px 14px;border:0;border-radius:8px;font-size:14px;background:#3a3a3a;color:#fff}
+button.on{background:#c62828}button.del{background:#333;color:#f88}
+input,select{background:#262626;color:#eee;border:1px solid #3a3a3a;border-radius:6px;padding:6px}
+.mono{font-family:ui-monospace,Consolas,monospace;color:#9cdcfe;font-size:13px}
+.small{font-size:12px;color:#888;margin-top:10px;line-height:1.7}
+.day{display:inline-block;padding:4px 7px;margin:2px;border-radius:6px;background:#262626;cursor:pointer;font-size:12px}
+.day.sel{background:#c62828}
+</style></head><body>
+<h2 style="font-size:17px;margin:2px 0 12px">斐讯 TC1 · MicroPython（换脑版）</h2>
+
+<div id="sws"></div>
+<div class="small mono" id="meter">--</div>
+
+<h3>定时</h3>
+<div id="sched"></div>
+<div class="row" style="flex-wrap:wrap">
+  <select id="sch_ch">
+    <option value="total">总开关</option><option value="1">插孔1</option><option value="2">插孔2</option>
+    <option value="3">插孔3</option><option value="4">插孔4</option><option value="5">插孔5</option>
+    <option value="6">插孔6</option></select>
+  <select id="sch_on"><option value="1">开</option><option value="0">关</option></select>
+  <input id="sch_t" type="time" value="07:30" style="width:110px">
+  <select id="sch_mode" onchange="days()"><option value="once">单次</option><option value="week">每周</option></select>
+  <button onclick="addSched()">添加</button>
+</div>
+<div id="days" style="margin:4px 0 2px"></div>
+
+<h3>倒计时</h3>
+<div id="cds"></div>
+<div class="row">
+  <select id="cd_ch">
+    <option value="total">总开关</option><option value="1">插孔1</option><option value="2">插孔2</option>
+    <option value="3">插孔3</option><option value="4">插孔4</option><option value="5">插孔5</option>
+    <option value="6">插孔6</option></select>
+  <select id="cd_on"><option value="0">关</option><option value="1">开</option></select>
+  <input id="cd_min" type="number" value="30" min="1" style="width:70px"> 分钟
+  <button onclick="addCd()">开始</button>
+</div>
+
+<h3>WiFi 设置</h3>
+<div class="row"><span class="n">当前</span><span class="mono" id="w_now">--</span></div>
+<div class="row"><input id="w_ssid" placeholder="WiFi 名称 SSID" style="flex:1"></div>
+<div class="row"><input id="w_pass" type="password" placeholder="WiFi 密码" style="flex:1"></div>
+<div class="row"><button onclick="saveWifi()">保存并重启</button>
+  <span class="small" id="w_msg" style="flex:1;margin:0"></span></div>
+<div class="row"><input id="w_tok" placeholder="控制令牌 api_token（连上路由器后需要）" style="flex:1">
+  <button onclick="saveTok()">存令牌</button></div>
+<div class="small">首次配网：手机连热点 <b>TC1-Setup</b>（开放，无密码），
+  打开 <b>http://192.168.4.1</b> 填上面表单；连上路由器后本页地址为设备 IP。</div>
+
+<h3>电量</h3>
+<div class="row"><span class="n">累计</span><span class="mono" id="e_total">--</span></div>
+<div class="row"><span class="n">今日</span><span class="mono" id="e_today">--</span></div>
+
+<div class="small">UDP 54321 发现/配网 · HTTP /api/state /api/switch /api/schedule /api/countdown /api/cal<br>
+TC1 出厂只贴了 CF 通道，只能测<b>功率</b>，没有电压/电流。</div>
+
+<script>
+var NAMES={total:"总开关",1:"插孔1",2:"插孔2",3:"插孔3",4:"插孔4",5:"插孔5",6:"插孔6"};
+var KEYS=["total","1","2","3","4","5","6"];
+var DAYS=["一","二","三","四","五","六","日"], sel=127;
+function get(q){return fetch(q).then(function(r){return r.json()})}
+function days(){
+  var once=document.getElementById("sch_mode").value=="once";
+  var out="";for(var i=0;i<7;i++)out+='<span class="day'+(!once&&(sel>>i&1)?' sel':'')+
+    '" onclick="tg('+i+')" style="'+(once?'opacity:.35':'')+'">周'+DAYS[i]+'</span>';
+  document.getElementById("days").innerHTML=out}
+function tg(i){sel^=1<<i;days()}
+function render(s){
+  var out="";
+  for(var i=0;i<KEYS.length;i++){var k=KEYS[i];
+    out+='<div class="row"><span class="n">'+NAMES[k]+
+    '</span><button class="'+(s[k]?"on":"")+'" onclick="sw(\''+k+'\','+(s[k]?0:1)+')">'+
+    (s[k]?"ON":"OFF")+'</button></div>'}
+  document.getElementById("sws").innerHTML=out;
+  var m=s.meter||{};
+  document.getElementById("meter").textContent="功率 "+(m.power||0)+" W   CF "+
+    (m.p_raw||0)+" Hz   脉冲常数 K="+(m.k_imp||0)+" imp/kWh"+(m.calibrated?"（已标定）":"（估算值）");
+  var e=s.energy||{};
+  document.getElementById("e_total").textContent=(e.total_kwh||0)+" kWh";
+  document.getElementById("e_today").textContent=(e.today_kwh||0)+" kWh";
+  document.getElementById("w_now").textContent=(s.ap?"AP 模式（未联网） ":"已联网 ")+
+    (s.ip||"")+(s.rssi?("  信号 "+s.rssi+"dBm"):"");
+  out="";
+  (s.schedList||[]).forEach(function(r){
+    out+='<div class="row"><span class="n">'+(NAMES[r.ch]||r.ch)+' '+(r.on?"开":"关")+' '+
+      ("0"+r.hh).slice(-2)+':'+("0"+r.mm).slice(-2)+' '+
+      (r.days?('每周 '+(r.days==127?'每天':'选日')):'单次')+
+      '</span><button class="del" onclick="delSched('+r.id+')">删</button></div>'});
+  document.getElementById("sched").innerHTML=out||'<div class="small">暂无</div>';
+  out="";
+  (s.cd||[]).forEach(function(c){
+    out+='<div class="row"><span class="n">'+(NAMES[c.ch]||c.ch)+' '+(c.on?"开":"关")+' '+
+      Math.ceil(c.left)+'s 后</span><button class="del" onclick="delCd('+c.id+')">删</button></div>'});
+  document.getElementById("cds").innerHTML=out||'<div class="small">暂无</div>';
+}
+function tick(){
+  get("/api/state").then(function(s){
+    get("/api/schedule").then(function(l){s.schedList=l;render(s)})
+  }).catch(function(){})
+}
+function sw(c,on){get("/api/switch?ch="+c+"&on="+on).then(tick)}
+function addSched(){
+  var t=document.getElementById("sch_t").value.split(":");
+  var mode=document.getElementById("sch_mode").value;
+  var body={op:"add",ch:document.getElementById("sch_ch").value,
+    on:+document.getElementById("sch_on").value,hh:+t[0],mm:+t[1],
+    days:mode=="once"?0:sel};
+  fetch("/api/schedule",{method:"POST",body:JSON.stringify(body)}).then(tick)
+}
+function delSched(id){fetch("/api/schedule",{method:"POST",body:JSON.stringify({op:"del",id:id})}).then(tick)}
+function addCd(){
+  var body={op:"add",ch:document.getElementById("cd_ch").value,
+    on:+document.getElementById("cd_on").value,
+    sec:(+document.getElementById("cd_min").value)*60};
+  fetch("/api/countdown",{method:"POST",body:JSON.stringify(body)}).then(tick)
+}
+function delCd(id){fetch("/api/countdown",{method:"POST",body:JSON.stringify({op:"del",id:id})}).then(tick)}
+function tok(){return localStorage.getItem("tc1tok")||""}
+function saveTok(){
+  localStorage.setItem("tc1tok",document.getElementById("w_tok").value.trim());
+  document.getElementById("w_msg").textContent="令牌已保存在本机浏览器";
+}
+function saveWifi(){
+  var ssid=document.getElementById("w_ssid").value.trim();
+  var pass=document.getElementById("w_pass").value;
+  var msg=document.getElementById("w_msg");
+  if(!ssid){msg.textContent="请填写 SSID";return}
+  msg.textContent="正在连接，约 12 秒…";
+  fetch("/api/config?t="+encodeURIComponent(tok()),{method:"POST",
+    body:JSON.stringify({ssid:ssid,password:pass,try_connect:1})})
+   .then(function(r){return r.json()})
+   .then(function(j){msg.textContent=j.ok?("已连上 "+(j.ip||"")+"，凭据已保存，切到 STA…"):
+     "连接失败，原 WiFi 未改，请检查名称/密码"})
+   .catch(function(){msg.textContent="已提交。若连上成功设备会重启，失败请刷新重试"});
+}
+document.getElementById("w_tok").value=tok();
+days();tick();setInterval(tick,3000);
+</script></body></html>
