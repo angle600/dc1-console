@@ -26,7 +26,7 @@ from cat9554 import CAT9554, KEY1, KEY2, KEY3, RELAY0, RELAY1, RELAY2, RELAY3
 from cse7766 import CSE7766
 import store
 
-FW_VERSION = "1.2.10"
+FW_VERSION = "1.2.12"
 TYPE = "DC1"
 UDP_PORT = 54321
 PROV_WINDOW_MS = 30000
@@ -287,11 +287,16 @@ def set_gains():
         meter.v2r = float(m.get("v2r", 1.0))
 
 
+RELAY_GAP_MS = 500
+_last_rly = 0
+
+
 def relay_write(ch, on):
-    """写一路继电器。
-    ★ v1.2.8：CAT9554 上电/掉电复位后 CFG 回 0xFF（全输入），此时 write_pin 写输出
-    寄存器**不报错但引脚是输入**，继电器完全不动作（表现为「API 成功却没咔哒声」）。
-    因此每次写前校验方向寄存器，异常则重配后再写。"""
+    """写一路继电器。v1.2.8 校验 U7 方向寄存器(掉电复位自愈)；v1.2.11 相邻动作间隔 500ms。"""
+    global _last_rly
+    g = RELAY_GAP_MS - time.ticks_diff(time.ticks_ms(), _last_rly)
+    if g > 0 and _last_rly:
+        time.sleep_ms(g)
     if u7 is not None:
         try:
             if not u7.is_configured():
@@ -304,6 +309,7 @@ def relay_write(ch, on):
                 u7.write_pin(RELAY_BIT[ch], 1 if on else 0)
             except Exception:
                 pass
+    _last_rly = time.ticks_ms()
     relay_state[ch] = bool(on)
 
 
@@ -392,9 +398,6 @@ def restore_state():
     else:
         relay_write("total", False)
         state["total"] = False
-    # ★ v1.2.9：总继电器吸合瞬间电流冲击会让 5V 短暂跌落，紧接着写分路会 ENODEV/
-    #   写不进去（实测 out 缺位、日志却显示成功）。这里等电源稳住，且每路之间留间隔。
-    time.sleep_ms(150)
     for k in ("1", "2", "3"):
         if s.get(k, True):
             relay_write(k, True)
@@ -402,7 +405,6 @@ def restore_state():
         else:
             relay_write(k, False)
             state[k] = False
-        time.sleep_ms(50)
     logo_write(bool(s.get("logo", True)))
     # 回读实际寄存器，确认真的写进去了（不再只信内存字典）
     real = -1
@@ -914,27 +916,6 @@ def handle(conn):
                      % (TYPE, FW_VERSION))
     if path == "/api/info":
         return reply(conn, "200 OK", json.dumps(info_obj()))
-    if path == "/api/raw":
-        # ★ 调试接口：直接写 U7 输出寄存器（绕过状态逻辑），排查继电器驱动/极性用。
-        #   用法 GET /api/raw?v=0xF7&t=<token>（P7..P0，1=输出高）。
-        #   注意：写完后 state 字典与实际可能不一致，正常操作一次 /api/switch 即可复位。
-        if not need_token(hdrs, q):
-            return reply(conn, "401 Unauthorized", '{"err":"token"}')
-        if u7 is None:
-            return reply(conn, "200 OK", '{"ok":0,"err":"no u7"}')
-        vs = q.get("v", "0")
-        try:
-            v = int(vs, 16) if (len(vs) > 2 and vs[:2].lower() == "0x") else int(vs)
-        except Exception:
-            return reply(conn, "400 Bad Request", '{"err":"bad v"}')
-        try:
-            u7.out = v & 0xFF
-            u7._wr(0x01, u7.out)
-            rb = u7._rd(0x01)
-            log("raw out=0x%02X rb=0x%02X" % (v & 0xFF, rb))
-            return reply(conn, "200 OK", json.dumps({"ok": 1, "w": v & 0xFF, "rb": rb}))
-        except Exception as e:
-            return reply(conn, "200 OK", json.dumps({"ok": 0, "err": repr(e)}))
     if path == "/api/hw":
         # 硬件诊断：U7 方向/输出/输入寄存器 + 是否已复位（cfg 应为 0x0F）
         d = {"uart0": uart0 is not None, "i2c": i2c is not None,
@@ -1216,15 +1197,27 @@ energy = store.Energy()
 # 注意：restore_state 已移到 init_hw() 之后调用——U7 未初始化时 relay_write 只改内存字典，
 # 继电器不会真正吸合。见下方硬件初始化之后。
 
-# LOGO 已亮后再采 KEY1。按住开机 → 强制 AP，不连已记录的 SSID。
+# LOGO 已亮后再采 KEY1。
+#   按住总键开机 → ① 照旧强制进 AP 配网（原功能不变）
+#                   ② v1.2.12 新增：复位默认状态（所有开关置开 + 清空定时器/倒计时）
 force_ap = False
+reset_all = False
 try:
-    force_ap = key1_held()
+    reset_all = key1_held()
+    force_ap = reset_all
 except Exception as e:
     pass
     log("key1_held fail: %s" % e)
-log("force_ap: %s" % force_ap)
-pass
+log("force_ap: %s reset_all: %s" % (force_ap, reset_all))
+if reset_all:
+    try:
+        save_json(STATE_FILE, {"total": True, "1": True, "2": True, "3": True, "logo": True})
+        sched.rules = []
+        sched.flush()
+        cd.clear()
+        log("RESET: all switches ON, sched+cd cleared")
+    except Exception as e:
+        log_err("reset", e)
 
 w = None if force_ap else wifi_sta()
 if w is None:
