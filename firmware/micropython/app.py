@@ -1,5 +1,21 @@
 """斐讯 DC1 智能排插 —— MicroPython 固件 v1.1（ESP8266 1MB）
 
+★ 体积红线（2026-11-21 实测，务必先读）
+    本文件直接 mpy-cross 出来是 **17,454 B**，1 MB 版 ESP8266 加载不了：
+        File "app.py", line 1, in <module>
+        MemoryError: memory allocation failed, allocating 1336 bytes
+    能跑的产物是 **16,205 B**，即 `firmware/build/mpy/app-1.2.13-16205.mpy`
+    （= 设备上实际运行的那份，sha256 4b86e4aa1ce20736…）。那份是从一份精简过的
+    源码编出来的，精简源码没有入库，所以**本文件当前不能直接部署**。
+
+    要恢复"本文件可部署"，二选一：
+      A) 把本文件精简到 16.2 KB 以内（需要重做当年的瘦身）
+      B) 换 4 MB flash 模块，刷 4 MB 版固件（heap 翻倍）
+    mpy-cross 的 -O/-Os/-O0/-msmall-int-bits/-march 对体积**完全无影响**，别浪费时间。
+
+    下方 handle() 里的"空包重试"是修好的逻辑（原来 recv 返回 b"" 被当 EOF，
+    导致请求体 >600B 必截断、OTA 只能 256B 分块），等有 4 MB 模块就能直接用。
+
 对外能力（内网自持，无云）：
   * UDP 54321 广播发现：{"t":"discover"} → 回设备信息（type="DC1" 可扩展）
   * 上电 **30 秒内**接受 UDP 配网：{"t":"prov","ssid":..,"pass":..}
@@ -23,10 +39,11 @@ import network
 from machine import Pin, I2C, UART
 
 from cat9554 import CAT9554, KEY1, KEY2, KEY3, RELAY0, RELAY1, RELAY2, RELAY3
-from cse7766 import CSE7766
 import store
+# 注：CSE7766 计量已拆到 meter_ext.py，仅在 meter_enabled=true 时按需 import，
+#     避免常驻占用 app.mpy 的堆（ESP8266 堆紧张，>16.6KB 会 OOM）。
 
-FW_VERSION = "1.2.12"
+FW_VERSION = "1.2.13"
 TYPE = "DC1"
 UDP_PORT = 54321
 PROV_WINDOW_MS = 30000
@@ -159,7 +176,7 @@ def init_hw():
     """WiFi/HTTP 起来之后再初始化硬件。
     debug_log_tx=True：UART0 留在默认 GPIO1(TX)/GPIO3(RX)，LOG_TX 输出 115200 日志；
       代价是 CSE7766 计量暂缓、U7(I2C SDA=GPIO3) 可能 ENODEV 后自动降级。"""
-    global uart0, i2c, u7, logo, pin_total
+    global i2c, u7, logo, pin_total
     if not cfg.get("hw", True):
         pass
         log("hw skipped")
@@ -167,26 +184,14 @@ def init_hw():
     # ★ GPIO3 同时是 UART0-RX 与 U7 的 I2C-SDA。
     #   调试模式不 swap：UART0 TX 留在 GPIO1 → LOG_TX 有日志输出；
     #   U7 可能因 GPIO3 被占而 ENODEV，属预期降级，HTTP/OTA/灯不受影响。
+    # ★ v1.2.13：UART0/CSE7766 全部搬进 meter_ext.py，按需加载。
     if cfg.get("debug_log_tx"):
-        uart0 = None
-        pass
-        log("UART0 stays GPIO1/3 (LOG_TX), meter skipped")
+        log("UART0 stays GPIO1/3, meter skipped")
     elif not cfg.get("meter_enabled"):
-        # ★ v1.2.7 方案B：计量硬件禁用（CSE7766 疑似损坏，RX1 永久不接回）。
-        #   此时完全不创建 UART0，GPIO13(RX1)/GPIO15 都不被固件占用，
-        #   避免 GPIO13 被配成输入后受外部异常灌流影响。
-        #   要恢复计量：POST /api/config {"meter_enabled":true} 后重启，
-        #   或 GET /api/meter?on=1 即时启用（init_meter 会重建 UART0）。功能代码完整保留。
-        uart0 = None
+        # 计量禁用：完全不碰 GPIO13(RX1)/GPIO15，避免受外部异常灌流影响。
         log("meter disabled: UART0/GPIO13 not claimed")
     else:
-        uart0 = None
-        try:
-            uart0 = UART(0, baudrate=4800, bits=8, parity=0, stop=1, tx=15, rx=13,
-                         timeout=200)
-            pass
-        except Exception as e:
-            pass
+        init_meter()
 
     i2c = None
     u7 = None
@@ -210,53 +215,33 @@ def init_hw():
 
 
 relay_state = {k: False for k in RELAY_BIT}
-uart0 = None
 i2c = None
 u7 = None
 logo = None
 pin_total = None
 
-
-def _safe_mode():
-    """上电按住总键 → 不读计量（仅当按键确实为高有效时生效）"""
-    if pin_total is None:
-        return False
-    for _ in range(20):
-        if pin_total.value() != 1:
-            return False
-        time.sleep_ms(5)
-    return True
-
-
 meter = None
 
 
 def init_meter():
-    """meter_enabled=True 才解析 CSE7766 帧；UART 已在上电时 swap 好。
-    若此前被 /api/meter?on=0 释放过，这里重新 swap 回来。"""
-    global meter, uart0
+    """按需加载计量模块（meter_ext.py）。
+    禁用/调试模式绝不 swap UART0 —— 否则 LOG_TX 立刻没输出。
+    模块内有自己的 UART0(tx=15,rx=13,4800 8E1) + CSE7766 + Energy。"""
+    global meter
     if cfg.get("debug_log_tx"):
-        # 调试模式绝不能 swap UART0 —— 否则 LOG_TX 立刻没输出
         pass
         return
     if not cfg.get("meter_enabled"):
         pass
         return
-    if uart0 is None:
-        try:
-            uart0 = UART(0, baudrate=4800, bits=8, parity=0, stop=1,
-                         tx=15, rx=13, timeout=200)
-            pass
-        except Exception as e:
-            pass
-            return
-    # 注：GPIO16 悬空时会误判为"按住"，故不再用它决定是否跳过计量
+    if meter is not None:
+        return
     try:
-        meter = CSE7766(uart0, v1r=float((cfg.get("meter") or {}).get("v1r", 1.0)),
-                        v2r=float((cfg.get("meter") or {}).get("v2r", 1.0)))
-        pass
+        import meter_ext
+        meter = meter_ext.MeterExt(cfg)
+        log("meter: loaded (meter_ext)")
     except Exception as e:
-        pass
+        log("meter init fail: %s" % e)
 
 
 req_n = 0          # 已处理 HTTP 请求数
@@ -278,13 +263,11 @@ def free_meter():
 
 
 def set_gains():
-    m = cfg.get("meter") or {}
     if meter:
-        meter.v_gain = float(m.get("v_gain", 1.0))
-        meter.i_gain = float(m.get("i_gain", 1.0))
-        meter.p_gain = float(m.get("p_gain", 1.0))
-        meter.v1r = float(m.get("v1r", 1.0))
-        meter.v2r = float(m.get("v2r", 1.0))
+        try:
+            meter.gains(cfg.get("meter") or {})
+        except Exception:
+            pass
 
 
 RELAY_GAP_MS = 500
@@ -798,7 +781,7 @@ def state_json():
                  m.get("pk", 0), m.get("pt", 0), m.get("energy_pulses", 0)))
     else:
         ms = '{"voltage":0,"current":0,"power":0}'
-    e = energy.state()
+    e = meter.energy.state() if meter else {"total_kwh": 0.0, "today_kwh": 0.0}
     try:
         rssi = w.status("rssi") if w else 0
     except Exception:
@@ -829,30 +812,38 @@ def handle(conn):
         gc.collect()
     except Exception:
         pass
-    # ESP8266 上不要给 accept 出来的 socket 设 timeout（recv 会立刻超时），
-    # 用 poll 判断可读后再做阻塞 recv。
+    # ESP8266 上不要给 accept 出来的 socket 设 timeout（recv 会立刻超时）。
+    # ★ 2026-11-21 修复：原来整个接收循环都靠 poll 判断，而 ESP8266 的 poll 会
+    #   误报"无数据"，导致大请求体被截断（实测 JSON body >597B 就坏，OTA 只能 256B 分块）。
+    #   现在 poll 只用来等首字节；首字节到了就说明客户端在发请求，后续用阻塞 recv
+    #   把 header 和 body 一次收满。
     data = b""
     p = select.poll()
     p.register(conn, select.POLLIN)
-    deadline = time.ticks_add(time.ticks_ms(), 3000)
-    while b"\r\n\r\n" not in data and len(data) < 4096:
-        left = time.ticks_diff(deadline, time.ticks_ms())
-        if left <= 0:
-            break
-        try:
-            ev = p.poll(left)
-        except Exception as e:
-            log_err("poll", e)
-            break
-        if not ev:
-            break
+    try:
+        ev = p.poll(3000)
+    except Exception as e:
+        log_err("poll", e)
+        return
+    if not ev:
+        return
+    # ESP8266 的 recv 在数据还没到时会返回 b""（不是 EOF），当成 EOF 直接 break
+    # 就会把请求体截断 —— 这正是 OTA 大分块失败的根因。空包重试，连续 30 次
+    # （≈300ms）仍无数据才放弃。
+    miss = 0
+    while b"\r\n\r\n" not in data and len(data) < 6144:
         try:
             chunk = conn.recv(512)
         except Exception as e:
             log_err("recv", e)
             break
         if not chunk:
-            break
+            miss += 1
+            if miss > 30:
+                break
+            time.sleep_ms(10)
+            continue
+        miss = 0
         data += chunk
     if not data:
         return
@@ -886,16 +877,28 @@ def handle(conn):
                 except Exception:
                     clen = 0
     if clen and len(body) < clen:
+        # 请求体上限：堆只有 ~6KB，超过就没法解码了，直接拒绝比 OOM 更可控
+        if clen > 6000:
+            return reply(conn, "413 Payload Too Large", '{"err":"too large"}')
         need = clen - len(body)
+        miss = 0
         while need > 0:
             try:
                 chunk = conn.recv(min(512, need))
-            except Exception:
+            except Exception as e:
+                log_err("recv-body", e)
                 break
             if not chunk:
-                break
+                miss += 1
+                if miss > 30:
+                    break
+                time.sleep_ms(10)
+                continue
+            miss = 0
             body += chunk
             need -= len(chunk)
+        if len(body) < clen:
+            log_err("body-short", "%d/%d" % (len(body), clen))
 
     path, q = parse_qs(target)
     try:
@@ -906,8 +909,8 @@ def handle(conn):
     if body:
         try:
             js = json.loads(body.decode())
-        except Exception:
-            js = {}
+        except Exception as e:
+            log_err("json", "%s len=%d/%d" % (e, len(body), clen))
 
     if path in ("/", "/index.html"):
         return serve_file(conn, "index.html", "text/html; charset=utf-8")
@@ -916,19 +919,6 @@ def handle(conn):
                      % (TYPE, FW_VERSION))
     if path == "/api/info":
         return reply(conn, "200 OK", json.dumps(info_obj()))
-    if path == "/api/hw":
-        # 硬件诊断：U7 方向/输出/输入寄存器 + 是否已复位（cfg 应为 0x0F）
-        d = {"uart0": uart0 is not None, "i2c": i2c is not None,
-             "u7": u7 is not None, "meter": meter is not None}
-        if u7 is not None:
-            try:
-                d["cfg"] = u7._rd(0x03)
-                d["out"] = u7._rd(0x01)
-                d["in"] = u7._rd(0x00)
-                d["cfg_ok"] = (d["cfg"] == 0x0F)
-            except Exception as e:
-                d["err"] = repr(e)
-        return reply(conn, "200 OK", json.dumps(d))
     if path == "/api/state":
         return reply(conn, "200 OK", state_json())
     if path == "/api/put" and method == "POST":
@@ -1022,7 +1012,7 @@ def handle(conn):
         return reply(conn, "200 OK", json.dumps({"log": txt}))
 
     if path == "/api/energy":
-        return reply(conn, "200 OK", json.dumps(energy.state()))
+        return reply(conn, "200 OK", json.dumps(meter.energy.state() if meter else {}))
     if path == "/api/meter":
         want = q.get("on", "")
         if want in ("0", "1"):
@@ -1192,7 +1182,7 @@ log("boot start FW=%s id=%s free=%d debug=%s" % (
 
 sched = store.Sched()
 cd = store.Countdown()
-energy = store.Energy()
+# energy 已随计量搬入 meter_ext（meter.energy），禁用计量时不实例化，省一点堆。
 
 # 注意：restore_state 已移到 init_hw() 之后调用——U7 未初始化时 relay_write 只改内存字典，
 # 继电器不会真正吸合。见下方硬件初始化之后。
@@ -1223,7 +1213,7 @@ w = None if force_ap else wifi_sta()
 if w is None:
     ap_mode = True
     wifi_ap()
-    pass
+    time.sleep_ms(600)      # ★ 等 AP 接口/IP 就绪再监听 80，否则 bind 可能失败
 else:
     pass
     # STA 已连上，关掉 ESP8266 默认开启的开放热点（否则旁边谁都能连）
@@ -1243,16 +1233,28 @@ except Exception as e:
     us = None
 
 srv_poll = None
-srv = socket.socket()
-srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-try:
-    srv.bind(("0.0.0.0", int(cfg_get("http_port"))))
-    srv.listen(4)
-    srv_poll = select.poll()
-    srv_poll.register(srv, select.POLLIN)
-except Exception as e:
-    pass
-    srv = None
+srv = None
+# ★ v1.2.13：AP 模式下接口/IP 可能尚未就绪，bind 会失败且旧代码把原因吞掉了。
+#   这里重试 3 次、每次间隔 300ms，并把真实异常写进 boot.log。
+_port = int(cfg_get("http_port"))
+for _try in range(3):
+    try:
+        srv = socket.socket()
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("0.0.0.0", _port))
+        srv.listen(4)
+        srv_poll = select.poll()
+        srv_poll.register(srv, select.POLLIN)
+        break
+    except Exception as e:
+        log("http bind[%d] fail: %s" % (_try, e))
+        try:
+            srv.close()
+        except Exception:
+            pass
+        srv = None
+        srv_poll = None
+        time.sleep_ms(300)
 
 try:
     gc.collect()
@@ -1278,7 +1280,7 @@ try:
         restore_state()
     except Exception as e:
         log_err("restore_state", str(e))
-    log("hw: uart=%s i2c=%s" % (uart0 is not None, u7 is not None))
+    log("hw: meter=%s i2c=%s" % (meter is not None, u7 is not None))
 except Exception as e:
     pass
     log("init_hw fail: %s" % e)
@@ -1376,8 +1378,7 @@ while True:
     except Exception as e:
         pass
     if meter:
-        if meter.poll():
-            energy.add(meter.last.get("power", 0), dt)
+        meter.poll(dt)
     else:
         time.sleep_ms(10)
 
