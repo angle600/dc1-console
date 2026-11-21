@@ -38,3 +38,11 @@ backup/
 # 设备真实配置（含 WiFi 密码）
 firmware/micropython/config.json
 firmware/tc1/config.json
+
+# 测试临时产物
+tools/_ap_index.html
+tools/config_ap.json
+tools/dc1_setup_profile.xml
+
+# ESP32-C3 需求书（29MB，仅本地参考）
+docs/esp32c3/
