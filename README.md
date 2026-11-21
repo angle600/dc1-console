@@ -86,7 +86,9 @@ A1 = MXCHIP EMW3031（MiCO）、A2 = HF-LPT230（汉枫固件），都跑不了 
 ├── hardware/                     # DC1 电路资料 + DC1-原理框图.svg
 ├── hardware/tc1/                 # TC1 电路资料（社区反推）+ TC1-原理框图.svg
 ├── docs/                         # 刷机 / 配网 / AI 控制 / MicroPython 方案
-└── tools/                        # mp_deploy.py（串口烧内核）等辅助脚本
+└── tools/                        # 辅助脚本
+    ├── mp_deploy.py              # WiFi 推固件 / 串口烧内核
+    └── pico_esp_flasher/         # Pico 版 ESP 下载器：USB-UART + IO0 + 3.3V 通断
 ```
 
 ## 编译与自检（本机已验证）

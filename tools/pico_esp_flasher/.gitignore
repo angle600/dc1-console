@@ -1,0 +1,9 @@
+# 本地工具链（366 MB，不入库）
+.toolchain/
+
+# 编译产物
+firmware/build/
+firmware-mpy/*.uf2
+
+# 调试临时脚本与日志（以 _ 开头）
+_*

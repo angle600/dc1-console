@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="100%" viewBox="0 0 680 480" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,-apple-system,Segoe UI,sans-serif">
+<title>Pico 与 ESP 模块引脚接线图</title>
+<desc>Pico RP2040 通过 UART0 连接 ESP 模块，GP2/GP3 经 N-MOS 开漏拉低 GPIO0 与 EN，GP4 经 P-MOS 高边开关控制 3.3V 电源。</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+<rect width="680" height="480" fill="#14181f"/>
+
+<rect x="46" y="52" width="152" height="356" rx="12" fill="#0C447C" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="122" y="76" text-anchor="middle" fill="#E6F1FB" font-size="13" font-weight="500">Pico / RP2040</text>
+<text x="122" y="94" text-anchor="middle" fill="#85B7EB" font-size="11">USB-C → PC 主机</text>
+
+<circle cx="198" cy="108" r="3" fill="#B5D4F4"/>
+<text x="62" y="112" fill="#E6F1FB" font-size="12">GP0</text>
+<text x="190" y="112" text-anchor="end" fill="#85B7EB" font-size="10">Pin 1</text>
+<circle cx="198" cy="162" r="3" fill="#B5D4F4"/>
+<text x="62" y="166" fill="#E6F1FB" font-size="12">GP1</text>
+<text x="190" y="166" text-anchor="end" fill="#85B7EB" font-size="10">Pin 2</text>
+<circle cx="198" cy="216" r="3" fill="#B5D4F4"/>
+<text x="62" y="220" fill="#E6F1FB" font-size="12">GP2</text>
+<text x="190" y="220" text-anchor="end" fill="#85B7EB" font-size="10">Pin 4</text>
+<circle cx="198" cy="270" r="3" fill="#B5D4F4"/>
+<text x="62" y="274" fill="#E6F1FB" font-size="12">GP3</text>
+<text x="190" y="274" text-anchor="end" fill="#85B7EB" font-size="10">Pin 5</text>
+<circle cx="198" cy="324" r="3" fill="#B5D4F4"/>
+<text x="62" y="328" fill="#E6F1FB" font-size="12">GP4</text>
+<text x="190" y="328" text-anchor="end" fill="#85B7EB" font-size="10">Pin 6</text>
+<circle cx="198" cy="378" r="3" fill="#B5D4F4"/>
+<text x="62" y="382" fill="#E6F1FB" font-size="12">GND</text>
+<text x="190" y="382" text-anchor="end" fill="#85B7EB" font-size="10">Pin 3</text>
+
+<rect x="470" y="52" width="164" height="356" rx="12" fill="#3C3489" stroke="#CECBF6" stroke-width="0.5"/>
+<text x="552" y="76" text-anchor="middle" fill="#EEEDFE" font-size="13" font-weight="500">ESP 模块</text>
+<text x="552" y="94" text-anchor="middle" fill="#CECBF6" font-size="11">ESP-12S / WROOM-32</text>
+<circle cx="470" cy="108" r="3" fill="#CECBF6"/>
+<text x="482" y="112" fill="#EEEDFE" font-size="12">RXD</text>
+<circle cx="470" cy="162" r="3" fill="#CECBF6"/>
+<text x="482" y="166" fill="#EEEDFE" font-size="12">TXD</text>
+<circle cx="470" cy="216" r="3" fill="#CECBF6"/>
+<text x="482" y="220" fill="#EEEDFE" font-size="12">GPIO0</text>
+<circle cx="470" cy="270" r="3" fill="#CECBF6"/>
+<text x="482" y="274" fill="#EEEDFE" font-size="12">EN / CH_PD</text>
+<circle cx="470" cy="324" r="3" fill="#CECBF6"/>
+<text x="482" y="328" fill="#EEEDFE" font-size="12">3V3</text>
+<circle cx="470" cy="378" r="3" fill="#CECBF6"/>
+<text x="482" y="382" fill="#EEEDFE" font-size="12">GND</text>
+
+<line x1="198" y1="108" x2="295" y2="108" stroke="#5DCAA5" stroke-width="1.5"/>
+<rect x="295" y="97" width="78" height="22" rx="4" fill="#173404" stroke="#97C459" stroke-width="0.5"/>
+<text x="334" y="112" text-anchor="middle" fill="#EAF3DE" font-size="10">1 kΩ</text>
+<line x1="373" y1="108" x2="464" y2="108" stroke="#5DCAA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="464" y1="162" x2="204" y2="162" stroke="#5DCAA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<line x1="198" y1="216" x2="295" y2="216" stroke="#EF9F27" stroke-width="1.5"/>
+<rect x="295" y="205" width="78" height="22" rx="4" fill="#412402" stroke="#EF9F27" stroke-width="0.5"/>
+<text x="334" y="220" text-anchor="middle" fill="#FAEEDA" font-size="10">Q2 N-MOS</text>
+<line x1="373" y1="216" x2="464" y2="216" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<line x1="198" y1="270" x2="295" y2="270" stroke="#EF9F27" stroke-width="1.5"/>
+<rect x="295" y="259" width="78" height="22" rx="4" fill="#412402" stroke="#EF9F27" stroke-width="0.5"/>
+<text x="334" y="274" text-anchor="middle" fill="#FAEEDA" font-size="10">Q3 N-MOS</text>
+<line x1="373" y1="270" x2="464" y2="270" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<line x1="198" y1="324" x2="295" y2="324" stroke="#F09595" stroke-width="1.5"/>
+<rect x="295" y="313" width="78" height="22" rx="4" fill="#501313" stroke="#F09595" stroke-width="0.5"/>
+<text x="334" y="328" text-anchor="middle" fill="#FCEBEB" font-size="10">Q1 P-MOS</text>
+<line x1="373" y1="324" x2="464" y2="324" stroke="#F09595" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<line x1="198" y1="378" x2="470" y2="378" stroke="#B4B2A9" stroke-width="1" stroke-dasharray="4 3"/>
+<line x1="536" y1="324" x2="536" y2="262" stroke="#F09595" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="536" y1="262" x2="604" y2="262" stroke="#F09595" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="608" y="266" fill="#F09595" font-size="10">5V→3.3V</text>
+
+<text x="46" y="436" fill="#9AA4B2" font-size="11">GP0/GP1 交叉接：Pico TX → ESP RXD，GP0 串 1 kΩ 限制断电倒灌</text>
+<text x="46" y="456" fill="#9AA4B2" font-size="11">GP2/GP3 高电平 = 把 ESP 引脚拉低；GP4 高电平 = 3.3V 上电</text>
+<text x="46" y="476" fill="#6B7280" font-size="10">EN 的 10 kΩ 上拉必须接到 ESP 自己的 3V3，不要接 Pico 的 3V3</text>
+</svg>
