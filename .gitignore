@@ -46,3 +46,6 @@ tools/dc1_setup_profile.xml
 
 # ESP32-C3 需求书（29MB，仅本地参考）
 docs/esp32c3/
+
+# C 版编译产物
+firmware/c/build/
