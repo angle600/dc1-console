@@ -4,6 +4,28 @@ import sys
 import time
 import machine
 
+# ---------------------------------------------------------------- reset 守卫
+# app.py 里所有 machine.reset() 都会先 GC 再等 1.2s 才真正复位。
+# 目的：让 LittleFS 的元数据提交先落盘，与 SDK 重启时写 rf cal（sector 251）
+#       错开时间 —— 2026-11-21 实测 /api/reboot 三次坏两次，重启后 FS 挂载卡死，
+#       断电也救不回，只能重烧。该守卫不需要改 app.mpy（1MB 版体积已到上限）。
+try:
+    import gc as _gc
+    _orig_reset = machine.reset
+
+    def _safe_reset():
+        try:
+            _gc.collect()
+            time.sleep_ms(1200)
+        except Exception:
+            pass
+        _orig_reset()
+
+    machine.reset = _safe_reset
+    print("reset-guard on")
+except Exception as _e:
+    print("reset-guard fail:", _e)
+
 # 开机 LOGO/ZERO 灯自检：上电先灭 0.5s，再点亮，然后才执行正常程序。
 # GPIO14 低电平点亮 / 高电平熄灭；GPIO14 不是下载脚，不影响串口烧录。
 try:
