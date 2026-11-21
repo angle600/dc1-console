@@ -41,7 +41,7 @@
 #define ITF_DATA1     1
 #define ITF_CTRL      2
 
-#define FW_VERSION    "1.3.0"
+#define FW_VERSION    "1.4.0"
 
 #define UART_DEFAULT_BAUD 115200u
 #define UART_MAX_BAUD     3000000u
@@ -112,11 +112,30 @@ static bool pin_ok(int pin)
     return true;
 }
 
-static void esp_io0(bool low) { drive(g.pin_io0, low, g.pol_io0); g.io0_low = low; }
-static void esp_en (bool low) { drive(g.pin_en,  low, g.pol_en);  g.en_low  = low; }
+/* 需要驱动时才把引脚切成输出；默认全部是高阻输入，不干扰外部电路 */
+static inline void claim(uint8_t pin)
+{
+    gpio_init(pin);
+    gpio_set_dir(pin, GPIO_OUT);
+}
+
+static void esp_io0(bool low)
+{
+    claim(g.pin_io0);
+    drive(g.pin_io0, low, g.pol_io0);
+    g.io0_low = low;
+}
+
+static void esp_en(bool low)
+{
+    claim(g.pin_en);
+    drive(g.pin_en, low, g.pol_en);
+    g.en_low = low;
+}
 
 static void esp_pwr(bool on)
 {
+    claim(g.pin_pwr);
     if (on) {
         gpio_set_function(chan[0].pin_tx, GPIO_FUNC_UART);
         drive(g.pin_pwr, true, g.pol_pwr);
@@ -134,18 +153,26 @@ static void esp_pwr(bool on)
     }
 }
 
-static void apply_safe_levels(void)
+/* 把三个控制脚全部释放成高阻输入，Pico 对外部电路完全透明 */
+static void release_all(void)
 {
     uint8_t pins[3] = { g.pin_pwr, g.pin_io0, g.pin_en };
-    bool    pols[3] = { g.pol_pwr, g.pol_io0, g.pol_en };
     for (int i = 0; i < 3; i++) {
         gpio_init(pins[i]);
-        gpio_set_dir(pins[i], GPIO_OUT);
-        drive(pins[i], false, pols[i]);
+        gpio_set_dir(pins[i], GPIO_IN);
+        gpio_disable_pulls(pins[i]);
     }
     g.pwr = false;
     g.io0_low = false;
     g.en_low = false;
+}
+
+/* 只释放某一路（RUN 之后用：IO0/EN 放开，PWR 继续供电） */
+static void release_pin(uint8_t pin)
+{
+    gpio_init(pin);
+    gpio_set_dir(pin, GPIO_IN);
+    gpio_disable_pulls(pin);
 }
 
 /*
@@ -347,6 +374,10 @@ static void ctl_status(void)
                g.pin_pwr, g.pol_pwr ? 'H' : 'L',
                g.pin_io0, g.pol_io0 ? 'H' : 'L',
                g.pin_en,  g.pol_en  ? 'H' : 'L');
+    ctl_printf("DIR pwr=%s io0=%s en=%s\r\n",
+               gpio_get_dir(g.pin_pwr) ? "OUT" : "IN",
+               gpio_get_dir(g.pin_io0) ? "OUT" : "IN",
+               gpio_get_dir(g.pin_en)  ? "OUT" : "IN");
 }
 
 static void ctl_help(void)
@@ -372,6 +403,7 @@ static void ctl_help(void)
     ctl_printf("-- mapping --\r\n");
     ctl_printf("PIN pwr|io0|en <n>\r\n");
     ctl_printf("POL pwr|io0|en <0|1>  1=active high 0=active low\r\n");
+    ctl_printf("RELEASE           all control pins -> Hi-Z input\r\n");
     ctl_printf("AUTO 0|1          DTR/RTS -> IO0/EN (UART0 side)\r\n");
     ctl_printf("BOOTSEL | STATUS | PINS | HELP\r\n");
 }
@@ -485,10 +517,12 @@ static void exec_line(char *s)
             int slot = map_slot(name);
             if (slot < 0) { ctl_printf("ERR PIN pwr|io0|en <n>\r\n"); return; }
             if (!pin_ok(pin)) { ctl_printf("ERR pin %d invalid\r\n", pin); return; }
+            uint8_t old = (slot == 0) ? g.pin_pwr : (slot == 1) ? g.pin_io0 : g.pin_en;
             if (slot == 0) g.pin_pwr = (uint8_t)pin;
             if (slot == 1) g.pin_io0 = (uint8_t)pin;
             if (slot == 2) g.pin_en  = (uint8_t)pin;
-            apply_safe_levels();
+            if (old != (uint8_t)pin) release_pin(old);   /* 旧脚交还高阻 */
+            release_all();
             ctl_printf("OK PIN %s %d\r\n", name, pin);
         } else {
             ctl_printf("ERR PIN pwr|io0|en <n>\r\n");
@@ -505,11 +539,17 @@ static void exec_line(char *s)
             if (slot == 0) g.pol_pwr = (v == 1);
             if (slot == 1) g.pol_io0 = (v == 1);
             if (slot == 2) g.pol_en  = (v == 1);
-            apply_safe_levels();
+            release_all();
             ctl_printf("OK POL %s %d\r\n", name, v);
         } else {
             ctl_printf("ERR POL pwr|io0|en <0|1>\r\n");
         }
+        return;
+    }
+    if (!strcmp(s, "RELEASE") || !strcmp(s, "HIZ")) {
+        /* Pico 停用：三个控制脚全部交还高阻，对外部电路完全透明 */
+        release_all();
+        ctl_printf("OK RELEASE all control pins -> input\r\n");
         return;
     }
     if (!strcmp(s, "PINS")) {
@@ -542,7 +582,12 @@ static void exec_line(char *s)
         ctl_printf("OK BOOT pwr=%d io0=%d en=%d\r\n", g.pwr, g.io0_low, g.en_low);
     } else if (!strcmp(s, "RUN") || !strcmp(s, "RESET")) {
         esp_reset_run();
-        ctl_printf("OK RUN\r\n");
+        /* 复位完成即交还 IO0/EN，PWR 继续供电让目标运行 */
+        release_pin(g.pin_io0);
+        release_pin(g.pin_en);
+        g.io0_low = false;
+        g.en_low = false;
+        ctl_printf("OK RUN (io0/en -> input, pwr held)\r\n");
     } else if (!strcmp(s, "AUTO")) {
         bool on;
         if (parse_bool(arg, &on) == 0) { g.auto_rst = on; ctl_printf("OK AUTO %d\r\n", on); }
@@ -676,7 +721,8 @@ static void io_setup(void)
     gpio_set_dir(PIN_LED, GPIO_OUT);
     gpio_put(PIN_LED, 0);
 
-    apply_safe_levels();
+    /* 三个控制脚也保持高阻，Pico 上电不干扰外部电路 */
+    release_all();
     chan_init();
 #ifdef WITH_DAP
     swd_init_pins();     /* GP13 nRESET / GP14 SWCLK / GP15 SWDIO */
