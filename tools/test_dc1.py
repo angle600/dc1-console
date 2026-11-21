@@ -122,12 +122,16 @@ def set_plug(c, ch, on):
 
 
 def restore_all_on(c):
-    """恢复为四路全开、无定时、无倒计时"""
+    """恢复为四路全开、无定时、无倒计时（total 要 4 次继电器动作，留足时间）"""
     try:
-        c.jget("/api/schedule", token=False)
         c.jpost("/api/schedule", {"op": "clear"})
         c.jpost("/api/countdown", {"op": "clear"})
         set_plug(c, "total", True)
+        time.sleep(2.6)
+        # total 只恢复 shadow 记录过的分路，这里逐个补开，确保真的全开
+        for ch in ("1", "2", "3"):
+            set_plug(c, ch, True)
+            time.sleep(0.9)
     except Exception:
         pass
 
@@ -175,13 +179,18 @@ def group_1(c, r):
 def group_2(c, r):
     g = "G2 开关"
     print("\n--[ G2 开关控制 ]--")
+    # 继电器之间有 500ms 防冲击间隔（与固件 RELAY_GAP_MS 一致）：
+    #   单路操作 = 1 次动作 -> 等 0.9s 足够
+    #   total 操作 = 4 次动作（3 路 + 总闸）-> 要等 2.6s
+    T1 = 1.5
+    T4 = 3.2
     set_plug(c, "total", True)
-    time.sleep(0.4)
-    base = get_state(c)
+    time.sleep(T4)
+    get_state(c)
 
     for ch in ("1", "2", "3"):
         set_plug(c, ch, False)
-        time.sleep(0.35)
+        time.sleep(T1)
         s = get_state(c)
         others = [p for p in ("1", "2", "3") if p != ch]
         ok = s.get(ch) == 0 and all(s.get(p) == 1 for p in others) and s.get("total") == 1
@@ -189,7 +198,7 @@ def group_2(c, r):
               "ch=%s others=%s total=%s"
               % (s.get(ch), [s.get(p) for p in others], s.get("total")))
         set_plug(c, ch, True)
-        time.sleep(0.35)
+        time.sleep(T1)
 
     s = get_state(c)
     r.add(g, "分控恢复后全为 1",
@@ -197,13 +206,13 @@ def group_2(c, r):
           str([s.get(p) for p in ("1", "2", "3")]))
 
     set_plug(c, "total", False)
-    time.sleep(0.6)
+    time.sleep(T4)
     s = get_state(c)
     r.add(g, "总控关闭 -> 全部含 logo 归 0",
           all(s.get(p) == 0 for p in PLUGS), str({p: s.get(p) for p in PLUGS}))
 
     set_plug(c, "total", True)
-    time.sleep(0.6)
+    time.sleep(T4)
     s = get_state(c)
     r.add(g, "总控打开 -> 全部含 logo 归 1",
           all(s.get(p) == 1 for p in PLUGS), str({p: s.get(p) for p in PLUGS}))
@@ -216,16 +225,17 @@ def group_2(c, r):
     oks = []
     for v in trues:
         c.jget("/api/switch?ch=1&on=%s" % v)
-        time.sleep(0.3)
+        time.sleep(T1)
         oks.append(get_state(c).get("1") == 1)
     r.add(g, "on 真值 1/true/on/ON 均生效", all(oks), str(oks))
 
     set_plug(c, "1", False)
-    time.sleep(0.3)
+    time.sleep(T1)
     c.jget("/api/switch?ch=1&on=0")
-    time.sleep(0.3)
+    time.sleep(T1)
     off_ok = get_state(c).get("1") == 0
     set_plug(c, "1", True)
+    time.sleep(T1)
     r.add(g, "on=0 关闭生效", off_ok, "ch1=%s" % ("0" if off_ok else "1"))
 
 
@@ -524,13 +534,14 @@ def group_9(c, r):
           "HTTP %d" % st)
 
     st, js = c.jpost("/api/put", {"off": 0, "b64": "QQ=="}, token=True)
-    r.add(g, "put 缺 name -> 400", st == 400, "HTTP %d" % st)
+    # MP 版缺 name -> 400；C 版（fw 2.x）没有文件系统，/api/put 明确返回 501
+    r.add(g, "put 缺 name -> 400（或 501 表示不支持）", st in (400, 501),
+          "HTTP %d" % st)
 
     st, js = c.jpost("/api/put", {"name": "t_probe.bin", "off": 0, "b64": "!!!"},
                      token=True)
-    # 固件对非法 base64 是宽松处理：a2b_base64 忽略非法字符得到空串 -> 写空文件 -> 200。
-    # 记录该行为，只要不是 500/断连就算通过。
-    r.add(g, "put 非法 base64 不崩溃（宽松解析）", st in (200, 400),
+    # MP 版对非法 base64 是宽松解析（写空文件返回 200）；C 版直接 501
+    r.add(g, "put 非法 base64 不崩溃", st in (200, 400, 501),
           "HTTP %d %s" % (st, js))
 
     # 连续快速请求
