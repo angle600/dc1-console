@@ -67,42 +67,49 @@ def main():
         time.sleep(2.0)
         fp.log("  " + fp.ctl_cmd(ctrl, "STATUS", 0.8))
 
-    if not args.no_erase:
-        fp.log("=== [3/6] 全片擦除 ===")
-        if fp.esptool(data, ["erase-flash"], timeout=300) != 0:
-            sys.exit("erase 失败")
-    else:
-        fp.log("=== [3/6] 跳过擦除（保留 NVS）===")
+    # 从进下载模式开始就必须保证退出时释放 IO0 —— 否则设备停在 bootloader 里
+    # 静默不运行，表现为「烧完 ping 不通、串口 0 字节」。
+    try:
+        if not args.no_erase:
+            fp.log("=== [3/6] 全片擦除 ===")
+            if fp.esptool(data, ["erase-flash"], timeout=300) != 0:
+                fp.log("erase 失败")
+                return 1
+        else:
+            fp.log("=== [3/6] 跳过擦除（保留 NVS）===")
 
-    fp.log("=== [4/6] 写 3 段 ===")
-    fp.log("  bootloader %d B @%s" % (os.path.getsize(boot), OFF_BOOT))
-    fp.log("  part-table %d B @%s" % (os.path.getsize(pt), OFF_PT))
-    fp.log("  app        %d B @%s" % (os.path.getsize(app), OFF_APP))
-    rc = fp.esptool(data, [
-        "write-flash",
-        OFF_BOOT, boot,
-        OFF_PT, pt,
-        OFF_APP, app,
-    ], timeout=900)
-    if rc != 0:
-        sys.exit("write 失败")
-
-    if not args.no_verify:
-        fp.log("=== [5/6] 校验 ===")
+        fp.log("=== [4/6] 写 3 段 ===")
+        fp.log("  bootloader %d B @%s" % (os.path.getsize(boot), OFF_BOOT))
+        fp.log("  part-table %d B @%s" % (os.path.getsize(pt), OFF_PT))
+        fp.log("  app        %d B @%s" % (os.path.getsize(app), OFF_APP))
         rc = fp.esptool(data, [
-            "verify-flash",
+            "write-flash",
             OFF_BOOT, boot,
             OFF_PT, pt,
             OFF_APP, app,
-        ], timeout=600)
+        ], timeout=900)
         if rc != 0:
-            sys.exit("verify 失败")
-    else:
-        fp.log("=== [5/6] 跳过校验 ===")
+            fp.log("write 失败")
+            return 1
 
-    fp.log("=== [6/6] 复位运行 ===")
-    fp.enter_run(ctrl)
-    time.sleep(3)
+        if not args.no_verify:
+            fp.log("=== [5/6] 校验 ===")
+            rc = fp.esptool(data, [
+                "verify-flash",
+                OFF_BOOT, boot,
+                OFF_PT, pt,
+                OFF_APP, app,
+            ], timeout=600)
+            if rc != 0:
+                fp.log("verify 失败")
+                return 1
+        else:
+            fp.log("=== [5/6] 跳过校验 ===")
+    finally:
+        fp.log("=== [6/6] 复位运行（无论成败都要释放 IO0）===")
+        fp.enter_run(ctrl)
+        time.sleep(3)
+
     ok, raw = fp.wait_repl(data, 20)
     txt = raw.decode("utf-8", "replace")
     for line in txt.replace("\r", "").splitlines():
